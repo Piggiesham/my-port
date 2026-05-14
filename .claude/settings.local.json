@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:api.anthropic.com)",
+      "Bash(gunzip -c \"/Users/kittipan/.claude/projects/-Users-kittipan-Claude-websites-My-Port/4e0fc6dd-28bc-46d0-bd21-4a72307ae422/tool-results/webfetch-1778762561615-rxuw0h.bin\")",
+      "Bash(tar -t)",
+      "Bash(tar -x -C /tmp/portfolio-design)",
+      "Bash(npm install *)",
+      "Bash(npm run *)"
+    ],
+    "additionalDirectories": [
+      "/tmp"
+    ]
+  }
+}
