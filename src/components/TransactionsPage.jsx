@@ -871,7 +871,7 @@ function AssetSearchInput({ assetType, catalog, value, onChange, onAssetCreated,
     return () => document.removeEventListener('mousedown', onClick);
   }, []);
 
-  const allowedTypes = ASSET_TYPE_FILTER[assetType] || [];
+  const allowedTypes = useMemo(() => ASSET_TYPE_FILTER[assetType] || [], [assetType]);
   const matches = useMemo(() => {
     const q = query.trim().toLowerCase();
     return catalog
@@ -1197,7 +1197,7 @@ function DetailRow({ label, value }) {
 // changing brokerage_id on an existing tx is unusual and would complicate
 // holdings reconciliation.
 // ============================================================================
-function EditTransactionForm({ tx, onCancel, onSaved, onClose }) {
+function EditTransactionForm({ tx, onCancel, onSaved }) {
   const cur = useContext(CurrencyContext);
   const [action, setAction] = useState(tx.action);
   const [actionOpen, setActionOpen] = useState(false);

@@ -7,6 +7,5 @@ export const supabase = (url && anonKey) ? createClient(url, anonKey) : null;
 export const supabaseEnabled = !!supabase;
 
 if (!supabaseEnabled) {
-  // eslint-disable-next-line no-console
   console.info('[Supabase] env vars not set — using mock data from src/data.js');
 }

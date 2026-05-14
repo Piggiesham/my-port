@@ -1,6 +1,6 @@
 import { useState, useMemo, useRef, useEffect, useCallback, Fragment } from 'react';
 import { CurrencyContext, SOURCES, PORTFOLIOS, ASSETS as MOCK_ASSETS, TRANSACTIONS as MOCK_TRANSACTIONS, totalsFor, fmtCurrency, FX_RATE, setFxRate } from './data.js';
-import { fetchAssets, fetchTransactions, fetchFxRate, fetchPriceMap, fetchAssetCatalog, computeAssetsFromTransactions } from './lib/api.js';
+import { fetchTransactions, fetchFxRate, fetchPriceMap, fetchAssetCatalog, computeAssetsFromTransactions } from './lib/api.js';
 import { supabaseEnabled } from './lib/supabase.js';
 import ReturnChart from './components/ReturnChart.jsx';
 import PieChart from './components/PieChart.jsx';
@@ -13,11 +13,13 @@ export default function App() {
   const [currency, setCurrency] = useState('USD');
   const [portfolio, setPortfolio] = useState('All');
   const [bellOpen, setBellOpen] = useState(false);
+  const [navOpen, setNavOpen] = useState(false);
   const [assets, setAssets] = useState(supabaseEnabled ? [] : MOCK_ASSETS);
   const [transactions, setTransactions] = useState(supabaseEnabled ? [] : MOCK_TRANSACTIONS);
   const [priceMap, setPriceMap] = useState({});
   const [fxRate, setFxRateState] = useState(FX_RATE);
   const bellRef = useRef(null);
+  const navDdRef = useRef(null);
 
   const refreshFromSupabase = useCallback(async () => {
     if (!supabaseEnabled) return;
@@ -64,12 +66,15 @@ export default function App() {
   const gainUp = totalGain >= 0;
 
   useEffect(() => {
-    const onClick = (e) => { if (bellRef.current && !bellRef.current.contains(e.target)) setBellOpen(false); };
+    const onClick = (e) => {
+      if (bellRef.current && !bellRef.current.contains(e.target)) setBellOpen(false);
+      if (navDdRef.current && !navDdRef.current.contains(e.target)) setNavOpen(false);
+    };
     document.addEventListener('mousedown', onClick);
     return () => document.removeEventListener('mousedown', onClick);
   }, []);
 
-  const navItems = ['Overview', 'Transactions', 'Watchlist', 'Settings'];
+  const navItems = ['Overview', 'Transactions', 'Watchlist'];
 
   return (
     <CurrencyContext.Provider value={ctx}>
@@ -79,9 +84,27 @@ export default function App() {
             <div className="brand-dot">P</div>
             <span className="brand-text">My Port</span>
           </div>
-          <div className="nav">
+          <div className="nav nav-desktop">
             {navItems.map((t) =>
               <button key={t} className={t === navTab ? 'active' : ''} onClick={() => setNavTab(t)}>{t}</button>
+            )}
+          </div>
+          <div className="nav-mobile dropdown" ref={navDdRef}>
+            <button className={`dropdown-btn${navOpen ? ' open' : ''}`} onClick={() => setNavOpen(o => !o)}>
+              <span>{navTab}</span>
+              <svg className="caret" width="10" height="10" viewBox="0 0 10 10" fill="none">
+                <path d="M2 4l3 3 3-3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            </button>
+            {navOpen && (
+              <div className="dropdown-menu">
+                {navItems.map(t => (
+                  <button key={t} className={`dropdown-item${t === navTab ? ' selected' : ''}`}
+                    onClick={() => { setNavTab(t); setNavOpen(false); }}>
+                    <span>{t}</span>
+                  </button>
+                ))}
+              </div>
             )}
           </div>
           <div className="topbar-right">
@@ -177,25 +200,8 @@ export default function App() {
           />
         )}
         {navTab === 'Watchlist' && <WatchlistPage />}
-        {navTab === 'Settings' && <EmptyTab name="Settings" />}
       </div>
     </CurrencyContext.Provider>
   );
 }
 
-function EmptyTab({ name }) {
-  return (
-    <div className="empty-tab">
-      <div className="empty-icon">
-        <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
-          <rect x="5" y="7" width="22" height="18" rx="3" stroke="currentColor" strokeWidth="1.5" />
-          <path d="M5 12h22" stroke="currentColor" strokeWidth="1.5" />
-          <circle cx="9" cy="9.5" r="0.8" fill="currentColor" />
-          <circle cx="11.5" cy="9.5" r="0.8" fill="currentColor" />
-        </svg>
-      </div>
-      <div className="empty-title">{name}</div>
-      <div className="empty-sub">This section is under construction. Check back soon.</div>
-    </div>
-  );
-}

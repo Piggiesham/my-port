@@ -35,6 +35,8 @@
   .nav button { padding: 8px 14px; font-size: 14px; color: var(--text-dim); border-radius: 999px; white-space: nowrap; }
   .nav button.active { color: var(--text); background: var(--panel); }
   .nav button:hover:not(.active) { color: var(--text); }
+  .nav-mobile { display: none; }
+  .nav-mobile .dropdown-menu { right: auto; left: 0; }
   .user-pill { display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 14px; border: 1px solid var(--border); border-radius: 999px; font-size: 13px; color: var(--text-dim); }
   .user-pill .name { white-space: nowrap; }
   .avatar { width: 28px; height: 28px; border-radius: 50%; background: linear-gradient(135deg, #f472b6, #fb7185); display: grid; place-items: center; color: white; font-weight: 600; font-size: 12px; flex-shrink: 0; }
@@ -325,7 +327,8 @@
   @media (max-width: 880px) {
     .app { padding: 16px 16px 80px; }
     .topbar { gap: 10px; }
-    .nav { gap: 0; overflow-x: auto; scrollbar-width: none; flex: 1; min-width: 0; }
+    .nav-desktop { display: none; }
+    .nav-mobile { display: block; }
     .nav::-webkit-scrollbar { display: none; }
     .nav button { padding: 7px 12px; font-size: 13px; }
     .user-pill .name { display: none; }
@@ -375,8 +378,6 @@
   }
 
   @media (max-width: 520px) {
-    .topbar { flex-wrap: wrap; }
-    .nav { order: 3; width: 100%; padding: 4px 0; }
     .brand .brand-text { display: none; }
     .hero-value { font-size: 28px; }
     .portfolio-tabs button { padding: 7px 10px; font-size: 12px; }

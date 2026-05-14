@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useEffect, useContext } from 'react';
+import { useState, useMemo, useCallback, useRef, useEffect, useContext } from 'react';
 import { CurrencyContext, SERIES_BY_PORTFOLIO, RANGES, dateLabelsFor, fmtCurrency } from '../data.js';
 import { computeReturnSeries, fetchPriceHistory, computeDailyReturnSeries } from '../lib/api.js';
 import { supabaseEnabled } from '../lib/supabase.js';
@@ -100,9 +100,10 @@ export default function ReturnChart({ portfolio = 'All', totalNow, totalCost, tr
   const tStart = useTimeX ? dates[0].getTime() : 0;
   const tEnd = useTimeX ? dates[dates.length - 1].getTime() : 0;
   const tSpan = tEnd - tStart || 1;
-  const x = i => useTimeX
+  const x = useCallback(i => useTimeX
     ? padL + ((dates[i].getTime() - tStart) / tSpan) * plotW
-    : padL + (i / (data.length - 1)) * plotW;
+    : padL + (i / (data.length - 1)) * plotW,
+    [useTimeX, padL, dates, tStart, tSpan, plotW, data.length]);
   const y = v => padT + plotH - ((v - yMin) / (yMax - yMin)) * plotH;
 
   const linePath = data.map((v, i) => `${i === 0 ? 'M' : 'L'} ${x(i).toFixed(2)} ${y(v).toFixed(2)}`).join(' ');
@@ -136,7 +137,7 @@ export default function ReturnChart({ portfolio = 'All', totalNow, totalCost, tr
       }
     }
     return ticks;
-  }, [data.length, useTimeX, tStart, tEnd, tSpan, dates]);
+  }, [data.length, useTimeX, tStart, tEnd, tSpan, dates, plotW, x, padL]);
 
   const fmtDate = (d) => {
     if (range === '1W') return d.toLocaleDateString('en-US', { weekday: 'short' });
