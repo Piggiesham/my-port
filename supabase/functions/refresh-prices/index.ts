@@ -96,6 +96,20 @@ Deno.serve(async (_req) => {
     });
   }
 
+  // Mirror today's prices into price_history so the historical series
+  // grows forward each day without re-fetching from Yahoo. USD is
+  // implicitly 1.0 and not stored in price_history.
+  const today = new Date().toISOString().slice(0, 10);
+  const historyRows = upserts
+    .filter(u => u.ticker !== 'USD')
+    .map(u => ({ ticker: u.ticker, date: today, price_usd: u.price_usd }));
+  if (historyRows.length > 0) {
+    const { error: phErr } = await supabase
+      .from('price_history')
+      .upsert(historyRows, { onConflict: 'ticker,date' });
+    if (phErr) console.warn('[refresh-prices] price_history upsert failed', phErr.message);
+  }
+
   await supabase.rpc('take_daily_snapshot');
 
   return new Response(
