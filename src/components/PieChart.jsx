@@ -23,25 +23,43 @@ export default function PieChart({ assets = ASSETS, totalNow = TOTAL_NOW, portfo
   const total = data.reduce((s, d) => s + d.value, 0) || 1;
 
   const cx = 90, cy = 90, r = 75, rInner = 50;
-  let cumAngle = -Math.PI / 2;
 
-  const arcs = data.map((d) => {
-    const a = (d.value / total) * Math.PI * 2;
-    const start = cumAngle;
-    const end = cumAngle + a;
-    cumAngle = end;
-    const largeArc = a > Math.PI ? 1 : 0;
-    const sx = cx + r * Math.cos(start);
-    const sy = cy + r * Math.sin(start);
-    const ex = cx + r * Math.cos(end);
-    const ey = cy + r * Math.sin(end);
-    const sxI = cx + rInner * Math.cos(start);
-    const syI = cy + rInner * Math.sin(start);
-    const exI = cx + rInner * Math.cos(end);
-    const eyI = cy + rInner * Math.sin(end);
-    const path = `M ${sx} ${sy} A ${r} ${r} 0 ${largeArc} 1 ${ex} ${ey} L ${exI} ${eyI} A ${rInner} ${rInner} 0 ${largeArc} 0 ${sxI} ${syI} Z`;
-    return { ...d, path, pct: (d.value / total) * 100 };
-  });
+  // Single-slice donut: a 360° arc from one point back to itself is degenerate
+  // in SVG (start == end → no fill). Build it as two 180° arcs instead.
+  const arcs = data.length === 1 ? (() => {
+    const d = data[0];
+    const sxO = cx, syO = cy - r;
+    const mxO = cx, myO = cy + r;
+    const sxI = cx, syI = cy - rInner;
+    const mxI = cx, myI = cy + rInner;
+    const path =
+      `M ${sxO} ${syO} ` +
+      `A ${r} ${r} 0 0 1 ${mxO} ${myO} ` +
+      `A ${r} ${r} 0 0 1 ${sxO} ${syO} ` +
+      `L ${sxI} ${syI} ` +
+      `A ${rInner} ${rInner} 0 0 0 ${mxI} ${myI} ` +
+      `A ${rInner} ${rInner} 0 0 0 ${sxI} ${syI} Z`;
+    return [{ ...d, path, pct: 100 }];
+  })() : (() => {
+    let cumAngle = -Math.PI / 2;
+    return data.map((d) => {
+      const a = (d.value / total) * Math.PI * 2;
+      const start = cumAngle;
+      const end = cumAngle + a;
+      cumAngle = end;
+      const largeArc = a > Math.PI ? 1 : 0;
+      const sx = cx + r * Math.cos(start);
+      const sy = cy + r * Math.sin(start);
+      const ex = cx + r * Math.cos(end);
+      const ey = cy + r * Math.sin(end);
+      const sxI = cx + rInner * Math.cos(start);
+      const syI = cy + rInner * Math.sin(start);
+      const exI = cx + rInner * Math.cos(end);
+      const eyI = cy + rInner * Math.sin(end);
+      const path = `M ${sx} ${sy} A ${r} ${r} 0 ${largeArc} 1 ${ex} ${ey} L ${exI} ${eyI} A ${rInner} ${rInner} 0 ${largeArc} 0 ${sxI} ${syI} Z`;
+      return { ...d, path, pct: (d.value / total) * 100 };
+    });
+  })();
 
   const focused = hoverIdx !== null ? arcs[hoverIdx] : null;
   const totalLabel = fmtCurrency(totalNow, cur.currency, { decimals: 0, compact: true });

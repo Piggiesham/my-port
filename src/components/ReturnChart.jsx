@@ -1,17 +1,86 @@
 import { useState, useMemo, useRef, useEffect, useContext } from 'react';
 import { CurrencyContext, SERIES_BY_PORTFOLIO, RANGES, dateLabelsFor, fmtCurrency } from '../data.js';
+import { computeReturnSeries, fetchPriceHistory, computeDailyReturnSeries } from '../lib/api.js';
+import { supabaseEnabled } from '../lib/supabase.js';
 
-export default function ReturnChart({ portfolio = 'All', totalNow, totalCost }) {
+const RANGE_DAYS = { '1W': 7, '1M': 30, '3M': 90, '6M': 180, '1Y': 365, 'ALL': Infinity };
+
+export default function ReturnChart({ portfolio = 'All', totalNow, totalCost, transactions = [], priceMap = {} }) {
   const cur = useContext(CurrencyContext);
   const [range, setRange] = useState('1Y');
   const [hover, setHover] = useState(null);
+  const [daily, setDaily] = useState(null);
   const wrapRef = useRef(null);
 
   useEffect(() => { setHover(null); }, [portfolio, range]);
 
-  const seriesSet = SERIES_BY_PORTFOLIO[portfolio] || SERIES_BY_PORTFOLIO['All'];
-  const data = seriesSet[range];
-  const dates = useMemo(() => dateLabelsFor(range), [range]);
+  // Fetch historical prices for every ticker that ever appeared in the
+  // (portfolio-filtered) transaction stream, then replay tx-derived qty per
+  // day against those prices. Falls back to the sparse tx-based curve when
+  // Supabase is disabled or the fetch hasn't completed yet.
+  useEffect(() => {
+    if (!supabaseEnabled || !transactions || transactions.length === 0) {
+      setDaily(null);
+      return;
+    }
+    let cancelled = false;
+    const days = RANGE_DAYS[range];
+    const earliestTxMs = Math.min(...transactions.map(t => new Date(t.date).getTime()));
+    const to = new Date();
+    const from = isFinite(days)
+      ? new Date(Math.max(earliestTxMs, Date.now() - days * 86400000))
+      : new Date(earliestTxMs);
+    const tickers = [...new Set(transactions.map(t => t.ticker).filter(Boolean))];
+
+    setDaily(null);
+    fetchPriceHistory(tickers, from, to).then(priceHist => {
+      if (cancelled) return;
+      const built = computeDailyReturnSeries(transactions, priceHist, from, to);
+      if (built.length >= 2) setDaily(built);
+    }).catch(err => console.warn('[ReturnChart] daily series failed', err));
+
+    return () => { cancelled = true; };
+  }, [transactions, range]);
+
+  // Build the series directly from transactions so the chart stays in sync
+  // with the transactions list. Prefers the daily historical series when
+  // loaded; falls back to the sparse event-based series otherwise.
+  const series = useMemo(() => {
+    if (daily && daily.length >= 2) return daily;
+    if (!transactions || transactions.length === 0) return null;
+    const full = computeReturnSeries(transactions, priceMap);
+    if (full.length < 2) return null;
+
+    const days = RANGE_DAYS[range];
+    if (!isFinite(days)) return full;
+
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+    const inRange = full.filter(p => p.date >= cutoff);
+
+    // If transactions exist inside the window, anchor the line at the
+    // portfolio value the moment before the window starts so percentages
+    // reflect the chosen range. Otherwise the line is flat at current value.
+    if (inRange.length === 0) {
+      const last = full[full.length - 1];
+      return [{ date: cutoff, value: last.value }, last];
+    }
+    const priorIdx = full.findIndex(p => p.date >= cutoff) - 1;
+    if (priorIdx >= 0) {
+      return [{ date: cutoff, value: full[priorIdx].value }, ...inRange];
+    }
+    return inRange;
+  }, [daily, transactions, priceMap, range]);
+
+  const data = useMemo(() => {
+    if (series) return series.map(s => s.value);
+    return (SERIES_BY_PORTFOLIO[portfolio] || SERIES_BY_PORTFOLIO['All'])[range];
+  }, [series, portfolio, range]);
+
+  const dates = useMemo(() => {
+    if (series) return series.map(s => s.date);
+    return dateLabelsFor(range);
+  }, [series, range]);
 
   const W = 800, H = 280;
   const padL = 8, padR = 72, padT = 16, padB = 28;
@@ -24,7 +93,16 @@ export default function ReturnChart({ portfolio = 'All', totalNow, totalCost }) 
   const yMin = min - yRange * 0.08;
   const yMax = max + yRange * 0.08;
 
-  const x = i => padL + (i / (data.length - 1)) * plotW;
+  // When the series is built from real transactions, dates are unevenly
+  // spaced. Plot x by time so the line accurately reflects when events
+  // happened. Fall back to index-based spacing for the synthetic series.
+  const useTimeX = !!series;
+  const tStart = useTimeX ? dates[0].getTime() : 0;
+  const tEnd = useTimeX ? dates[dates.length - 1].getTime() : 0;
+  const tSpan = tEnd - tStart || 1;
+  const x = i => useTimeX
+    ? padL + ((dates[i].getTime() - tStart) / tSpan) * plotW
+    : padL + (i / (data.length - 1)) * plotW;
   const y = v => padT + plotH - ((v - yMin) / (yMax - yMin)) * plotH;
 
   const linePath = data.map((v, i) => `${i === 0 ? 'M' : 'L'} ${x(i).toFixed(2)} ${y(v).toFixed(2)}`).join(' ');
@@ -45,9 +123,20 @@ export default function ReturnChart({ portfolio = 'All', totalNow, totalCost }) 
   const xTicks = useMemo(() => {
     const n = Math.min(5, data.length);
     const ticks = [];
-    for (let i = 0; i < n; i++) ticks.push(Math.round((i / (n - 1)) * (data.length - 1)));
+    if (useTimeX) {
+      for (let i = 0; i < n; i++) {
+        const t = tStart + ((tEnd - tStart) * i) / (n - 1);
+        const px = padL + ((t - tStart) / tSpan) * plotW;
+        ticks.push({ px, date: new Date(t) });
+      }
+    } else {
+      for (let i = 0; i < n; i++) {
+        const idx = Math.round((i / (n - 1)) * (data.length - 1));
+        ticks.push({ px: x(idx), date: dates[idx] });
+      }
+    }
     return ticks;
-  }, [data.length]);
+  }, [data.length, useTimeX, tStart, tEnd, tSpan, dates]);
 
   const fmtDate = (d) => {
     if (range === '1W') return d.toLocaleDateString('en-US', { weekday: 'short' });
@@ -64,8 +153,18 @@ export default function ReturnChart({ portfolio = 'All', totalNow, totalCost }) 
     const scaleX = W / rect.width;
     const px = (e.clientX - rect.left) * scaleX;
     if (px < padL || px > padL + plotW) { setHover(null); return; }
-    const ratio = (px - padL) / plotW;
-    const idx = Math.round(ratio * (data.length - 1));
+    let idx;
+    if (useTimeX) {
+      let best = 0, bestDist = Infinity;
+      for (let i = 0; i < data.length; i++) {
+        const d = Math.abs(x(i) - px);
+        if (d < bestDist) { bestDist = d; best = i; }
+      }
+      idx = best;
+    } else {
+      const ratio = (px - padL) / plotW;
+      idx = Math.round(ratio * (data.length - 1));
+    }
     setHover({ idx, clientX: e.clientX - rect.left, clientY: e.clientY - rect.top });
   };
 
@@ -134,9 +233,9 @@ export default function ReturnChart({ portfolio = 'All', totalNow, totalCost }) 
           <path d={areaPath} fill={`url(#${gradId})`} />
           <path d={linePath} fill="none" stroke={lineColor} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
 
-          {xTicks.map((idx, i) => (
-            <text key={i} className="axis-label" x={x(idx)} y={H - 8} textAnchor={i === 0 ? 'start' : i === xTicks.length - 1 ? 'end' : 'middle'}>
-              {fmtDate(dates[idx])}
+          {xTicks.map((t, i) => (
+            <text key={i} className="axis-label" x={t.px} y={H - 8} textAnchor={i === 0 ? 'start' : i === xTicks.length - 1 ? 'end' : 'middle'}>
+              {fmtDate(t.date)}
             </text>
           ))}
 

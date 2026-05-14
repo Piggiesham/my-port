@@ -1,6 +1,6 @@
-import { useState, useMemo, useRef, useEffect, Fragment } from 'react';
-import { CurrencyContext, SOURCES, PORTFOLIOS, ASSETS as MOCK_ASSETS, TRANSACTIONS as MOCK_TRANSACTIONS, totalsFor, fmtCurrency } from './data.js';
-import { fetchAssets, fetchTransactions } from './lib/api.js';
+import { useState, useMemo, useRef, useEffect, useCallback, Fragment } from 'react';
+import { CurrencyContext, SOURCES, PORTFOLIOS, ASSETS as MOCK_ASSETS, TRANSACTIONS as MOCK_TRANSACTIONS, totalsFor, fmtCurrency, FX_RATE, setFxRate } from './data.js';
+import { fetchAssets, fetchTransactions, fetchFxRate, fetchPriceMap, fetchAssetCatalog, computeAssetsFromTransactions } from './lib/api.js';
 import { supabaseEnabled } from './lib/supabase.js';
 import ReturnChart from './components/ReturnChart.jsx';
 import PieChart from './components/PieChart.jsx';
@@ -13,24 +13,40 @@ export default function App() {
   const [currency, setCurrency] = useState('USD');
   const [portfolio, setPortfolio] = useState('All');
   const [bellOpen, setBellOpen] = useState(false);
-  const [assets, setAssets] = useState(MOCK_ASSETS);
-  const [transactions, setTransactions] = useState(MOCK_TRANSACTIONS);
+  const [assets, setAssets] = useState(supabaseEnabled ? [] : MOCK_ASSETS);
+  const [transactions, setTransactions] = useState(supabaseEnabled ? [] : MOCK_TRANSACTIONS);
+  const [priceMap, setPriceMap] = useState({});
+  const [fxRate, setFxRateState] = useState(FX_RATE);
   const bellRef = useRef(null);
+
+  const refreshFromSupabase = useCallback(async () => {
+    if (!supabaseEnabled) return;
+    try {
+      const [txs, catalog, prices] = await Promise.all([
+        fetchTransactions(),
+        fetchAssetCatalog(),
+        fetchPriceMap(),
+      ]);
+      setTransactions(txs ?? []);
+      setPriceMap(prices ?? {});
+      const derived = computeAssetsFromTransactions(txs ?? [], catalog ?? [], prices ?? {});
+      const total = derived.reduce((s, a) => s + a.holdingUSD, 0) || 1;
+      setAssets(derived.map(a => ({ ...a, alloc: (a.holdingUSD / total) * 100 })));
+    } catch (err) {
+      console.error('[Supabase] refresh failed', err);
+    }
+  }, []);
 
   useEffect(() => {
     if (!supabaseEnabled) return;
-    fetchAssets().then(rows => {
-      if (rows?.length) {
-        const total = rows.reduce((s, a) => s + a.holdingUSD, 0) || 1;
-        setAssets(rows.map(a => ({ ...a, alloc: (a.holdingUSD / total) * 100 })));
-      }
-    }).catch(err => console.error('[Supabase] fetchAssets failed', err));
-    fetchTransactions().then(rows => {
-      if (rows?.length) setTransactions(rows);
-    }).catch(err => console.error('[Supabase] fetchTransactions failed', err));
-  }, []);
+    refreshFromSupabase();
+    fetchFxRate().then(rate => {
+      setFxRate(rate);       // updates the module-level binding read by fmtCurrency
+      setFxRateState(rate);  // forces a re-render so values reflect the new rate
+    }).catch(err => console.error('[Supabase] fetchFxRate failed', err));
+  }, [refreshFromSupabase]);
 
-  const ctx = useMemo(() => ({ currency, setCurrency }), [currency]);
+  const ctx = useMemo(() => ({ currency, setCurrency, fxRate }), [currency, fxRate]);
 
   const filteredAssets = useMemo(() => {
     if (portfolio === 'All') return assets;
@@ -137,7 +153,13 @@ export default function App() {
             </div>
 
             <div className="grid">
-              <ReturnChart portfolio={portfolio} totalNow={totalNow} totalCost={totalCost} />
+              <ReturnChart
+                portfolio={portfolio}
+                totalNow={totalNow}
+                totalCost={totalCost}
+                transactions={portfolio === 'All' ? transactions : transactions.filter(t => t.source === portfolio)}
+                priceMap={priceMap}
+              />
               <PieChart assets={filteredAssets} totalNow={totalNow} portfolio={portfolio} />
             </div>
 
@@ -147,7 +169,13 @@ export default function App() {
           </Fragment>
         )}
 
-        {navTab === 'Transactions' && <TransactionsPage transactions={transactions} assets={assets} />}
+        {navTab === 'Transactions' && (
+          <TransactionsPage
+            transactions={transactions}
+            assets={assets}
+            onTransactionAdded={refreshFromSupabase}
+          />
+        )}
         {navTab === 'Watchlist' && <WatchlistPage />}
         {navTab === 'Settings' && <EmptyTab name="Settings" />}
       </div>

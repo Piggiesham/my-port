@@ -2,7 +2,14 @@
 // When the Supabase env vars are present (see src/lib/supabase.js), real data
 // is fetched in App.jsx and replaces this.
 
-export const FX_RATE = 32.27; // 1 USD = 32.27 THB
+// FX_RATE is the live USD→THB exchange rate. The seeded value is a fallback
+// for local dev (no Supabase) and the first paint before fetchFxRate() resolves.
+// Mutable: setFxRate() updates the binding in-place; all consumers reading
+// `FX_RATE` via an ESM import will observe the new value on next render.
+export let FX_RATE = 32.27;
+export function setFxRate(v) {
+  if (typeof v === 'number' && isFinite(v) && v > 0) FX_RATE = v;
+}
 
 export const SOURCES = {
   'Dime!':   { color: '#6EF5A4', dot: '#3fbe72' },
@@ -59,17 +66,21 @@ const CURRENCY_MAP = (a) => (a.ticker === 'THB' ? 'THB' : 'USD');
 function groupByOn(assets, keyFn) {
   const m = new Map();
   for (const a of assets) {
+    const v = Number(a.holdingUSD) || 0;
+    if (v <= 0) continue;
     const k = keyFn(a);
-    if (!m.has(k)) m.set(k, 0);
-    m.set(k, m.get(k) + a.alloc);
+    m.set(k, (m.get(k) || 0) + v);
   }
   return [...m.entries()].sort((a,b) => b[1]-a[1]).map(([name, value], i) => ({ name, value, color: PALETTE[i % PALETTE.length] }));
 }
 
 export function categoryDataFor(assets) {
+  const individual = assets
+    .filter(a => (Number(a.holdingUSD) || 0) > 0)
+    .map((a, i) => ({ name: a.ticker, value: Number(a.holdingUSD), color: PALETTE[i % PALETTE.length] }));
   return {
     'By Asset Type':       groupByOn(assets, a => a.type),
-    'By Individual Asset': assets.map((a,i) => ({ name: a.ticker, value: a.alloc, color: PALETTE[i % PALETTE.length] })),
+    'By Individual Asset': individual,
     'By Sector':           groupByOn(assets, a => SECTOR_MAP[a.ticker] || 'Other'),
     'By Currency':         groupByOn(assets, CURRENCY_MAP),
     'By Source':           groupByOn(assets, a => a.source),

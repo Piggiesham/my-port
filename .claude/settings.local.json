@@ -6,7 +6,9 @@
       "Bash(tar -t)",
       "Bash(tar -x -C /tmp/portfolio-design)",
       "Bash(npm install *)",
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "Bash(npx vite *)",
+      "Skill(grill-me)"
     ],
     "additionalDirectories": [
       "/tmp"
