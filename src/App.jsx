@@ -50,6 +50,12 @@ export default function App() {
 
   const ctx = useMemo(() => ({ currency, setCurrency, fxRate }), [currency, fxRate]);
 
+  const portfolios = useMemo(() => {
+    const set = new Set(transactions.map(t => t.source).filter(Boolean));
+    const dynamic = [...set];
+    return ['All', ...(dynamic.length > 0 ? dynamic : PORTFOLIOS.filter(p => p !== 'All'))];
+  }, [transactions]);
+
   const filteredAssets = useMemo(() => {
     if (portfolio === 'All') return assets;
     const filtered = assets.filter(a => a.source === portfolio);
@@ -135,10 +141,6 @@ export default function App() {
                 </div>
               )}
             </div>
-            <div className="user-pill">
-              <span className="name">Sarah K.</span>
-              <span className="avatar">SK</span>
-            </div>
           </div>
         </div>
 
@@ -167,9 +169,9 @@ export default function App() {
             </div>
 
             <div className="portfolio-tabs" style={{ marginBottom: 20 }}>
-              {PORTFOLIOS.map(p => (
+              {portfolios.map(p => (
                 <button key={p} className={p === portfolio ? 'active' : ''} onClick={() => setPortfolio(p)}>
-                  {p !== 'All' && <span className="src-dot" style={{ background: SOURCES[p].color }}></span>}
+                  {p !== 'All' && <span className="src-dot" style={{ background: SOURCES[p]?.color || '#888' }}></span>}
                   <span>{p === 'All' ? 'All portfolios' : p}</span>
                 </button>
               ))}

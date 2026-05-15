@@ -30,6 +30,7 @@ const PORTFOLIO_TYPES = {
 
 export default function TransactionsPage({ transactions = MOCK_TRANSACTIONS, assets = MOCK_ASSETS, onTransactionAdded }) {
   const cur = useContext(CurrencyContext);
+  const fx = cur.fxRate || FX_RATE;
   const [query, setQuery] = useState('');
   const [sortKey, setSortKey] = useState('date_desc');
   const [sortOpen, setSortOpen] = useState(false);
@@ -106,7 +107,7 @@ export default function TransactionsPage({ transactions = MOCK_TRANSACTIONS, ass
   const fmtTxTime = (iso) => new Date(iso).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
   const fmtExecPrice = (t) => {
     if (t.price == null) return '—';
-    const v = t.price * (cur.currency === 'THB' ? FX_RATE : 1);
+    const v = t.price * (cur.currency === 'THB' ? fx : 1);
     return v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: t.price < 1 ? 4 : 2 });
   };
 
@@ -240,7 +241,7 @@ export default function TransactionsPage({ transactions = MOCK_TRANSACTIONS, ass
                       </span>
                       {cur.currency === 'USD' && (
                         <span style={{ display: 'block', fontSize: 11, color: 'var(--text-faint)', marginTop: 2 }}>
-                          ≈ ฿{(t.valueUSD * (t.fx_rate_at_tx ?? FX_RATE)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} THB
+                          ≈ ฿{(t.valueUSD * (t.fx_rate_at_tx ?? fx)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} THB
                         </span>
                       )}
                     </div>
@@ -363,20 +364,25 @@ function AddTransactionModal({ onClose, onAdded }) {
   }, [dateText]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-fill historical price when both ticker and date are set.
+  // Debounced 300ms to avoid spamming Yahoo on every keystroke; skipped
+  // for cash-flow tx types (no price field).
   useEffect(() => {
+    if (txType === 'Deposit' || txType === 'Withdraw') return;
     const t = (ticker || '').toUpperCase().trim();
     if (!t || !dateIso || t === 'USD') return;
     let cancelled = false;
-    setPriceLoading(true);
-    fetchHistoricalPrice(t, dateIso).then(p => {
-      if (cancelled) return;
-      if (p != null) {
-        setPrice(String(Number(p.toFixed(6))));
-        setPriceAutoFilled(true);
-      }
-    }).finally(() => { if (!cancelled) setPriceLoading(false); });
-    return () => { cancelled = true; };
-  }, [ticker, dateIso]);
+    const timer = setTimeout(() => {
+      setPriceLoading(true);
+      fetchHistoricalPrice(t, dateIso).then(p => {
+        if (cancelled) return;
+        if (p != null) {
+          setPrice(String(Number(p.toFixed(6))));
+          setPriceAutoFilled(true);
+        }
+      }).finally(() => { if (!cancelled) setPriceLoading(false); });
+    }, 300);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [ticker, dateIso, txType]);
 
   useEffect(() => {
     const onClick = (e) => {
@@ -401,6 +407,15 @@ function AddTransactionModal({ onClose, onAdded }) {
   const fxNum = parseFloat(fxRate) || FX_RATE;
   const toUsd = (v, ccy) => (ccy === 'THB' ? v / fxNum : v);
   const anyThb = !isCashFlow && (priceCcy === 'THB' || feesCcy === 'THB' || taxesCcy === 'THB');
+  // Converts a string value when its currency flips, so the underlying USD amount stays the same.
+  const convertValue = (raw, fromCcy, toCcy) => {
+    if (raw === '' || fromCcy === toCcy) return raw;
+    const num = parseFloat(raw);
+    if (!isFinite(num)) return raw;
+    const usd = fromCcy === 'THB' ? num / fxNum : num;
+    const out = toCcy === 'THB' ? usd * fxNum : usd;
+    return String(Number(out.toFixed(6)));
+  };
 
   const totalAmount = useMemo(() => {
     const q = parseFloat(qty) || 0;
@@ -518,12 +533,11 @@ function AddTransactionModal({ onClose, onAdded }) {
                       type="button"
                       onClick={() => {
                         setEntryCcy(c);
-                        if (c === 'THB') {
-                          setPriceCcy('THB'); setFeesCcy('THB'); setTaxesCcy('THB');
-                          if (!fxRate) setFxRate(String(FX_RATE));
-                        } else {
-                          setPriceCcy('USD'); setFeesCcy('USD'); setTaxesCcy('USD');
-                        }
+                        setPrice(convertValue(price, priceCcy, c));
+                        setFees(convertValue(fees, feesCcy, c));
+                        setTaxes(convertValue(taxes, taxesCcy, c));
+                        setPriceCcy(c); setFeesCcy(c); setTaxesCcy(c);
+                        if (c === 'THB' && !fxRate) setFxRate(String(FX_RATE));
                       }}
                       className="field-input"
                       style={{
@@ -651,7 +665,7 @@ function AddTransactionModal({ onClose, onAdded }) {
                 onChange={e => { setPrice(e.target.value); setPriceAutoFilled(false); }}
                 inputMode="decimal"
               />
-              <CurrencySuffix value={priceCcy} onChange={setPriceCcy} />
+              <CurrencySuffix value={priceCcy} onChange={c => { setPrice(convertValue(price, priceCcy, c)); setPriceCcy(c); }} />
             </div>
             {priceAutoFilled && !priceLoading && (
               <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 4 }}>Auto-filled from Yahoo Finance · close on {dateIso}</div>
@@ -683,7 +697,7 @@ function AddTransactionModal({ onClose, onAdded }) {
                 <label>Trading costs / FX fees</label>
                 <div className="field-with-suffix">
                   <input className="field-input" placeholder={`e.g. ${fmtCurrencySym(feesCcy)}10.00`} value={fees} onChange={e => setFees(e.target.value)} inputMode="decimal" />
-                  <CurrencySuffix value={feesCcy} onChange={setFeesCcy} />
+                  <CurrencySuffix value={feesCcy} onChange={c => { setFees(convertValue(fees, feesCcy, c)); setFeesCcy(c); }} />
                 </div>
               </div>
 
@@ -691,7 +705,7 @@ function AddTransactionModal({ onClose, onAdded }) {
                 <label>Taxes</label>
                 <div className="field-with-suffix">
                   <input className="field-input" placeholder={`e.g. ${fmtCurrencySym(taxesCcy)}15.00`} value={taxes} onChange={e => setTaxes(e.target.value)} inputMode="decimal" />
-                  <CurrencySuffix value={taxesCcy} onChange={setTaxesCcy} />
+                  <CurrencySuffix value={taxesCcy} onChange={c => { setTaxes(convertValue(taxes, taxesCcy, c)); setTaxesCcy(c); }} />
                 </div>
               </div>
 
@@ -758,7 +772,12 @@ function AddTransactionModal({ onClose, onAdded }) {
             </button>
             <button
               className="btn-secondary"
-              onClick={() => { setTicker(''); setQty(''); setPrice(''); setError(null); }}
+              onClick={() => {
+                setTicker(''); setQty(''); setPrice(''); setFees(''); setTaxes('');
+                setEntryCcy('USD'); setPriceCcy('USD'); setFeesCcy('USD'); setTaxesCcy('USD');
+                setFxRate(String(FX_RATE));
+                setPriceAutoFilled(false); setError(null);
+              }}
             >
               Save and Add Another
             </button>
@@ -1283,16 +1302,18 @@ function TransactionDetailModal({ tx, assetMap, onClose, onChanged }) {
           </div>
 
           {(() => {
-            const fx = tx.fx_rate_at_tx ?? FX_RATE;
+            const liveFx = cur.fxRate || FX_RATE;
+            const fx = tx.fx_rate_at_tx ?? liveFx;
             const aux = (usdAmt, dec = 2) => cur.currency === 'USD' ? (
               <span style={{ display: 'block', fontSize: 11, color: 'var(--text-faint)', marginTop: 2 }}>
                 ≈ ฿{(usdAmt * fx).toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec })} THB
               </span>
             ) : null;
-            const mainPrice = tx.price != null ? `${symbol}${(tx.price * (cur.currency === 'THB' ? FX_RATE : 1)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 6 })} ${code}` : '—';
-            const mainValue = `${symbol}${(tx.valueUSD * (cur.currency === 'THB' ? FX_RATE : 1)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${code}`;
-            const mainFees  = tx.fees  ? `${symbol}${(tx.fees * (cur.currency === 'THB' ? FX_RATE : 1)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${code}` : '—';
-            const mainTaxes = tx.taxes ? `${symbol}${(tx.taxes * (cur.currency === 'THB' ? FX_RATE : 1)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${code}` : '—';
+            const thbMul = cur.currency === 'THB' ? fx : 1;
+            const mainPrice = tx.price != null ? `${symbol}${(tx.price * thbMul).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 6 })} ${code}` : '—';
+            const mainValue = `${symbol}${(tx.valueUSD * thbMul).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${code}`;
+            const mainFees  = tx.fees  ? `${symbol}${(tx.fees * thbMul).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${code}` : '—';
+            const mainTaxes = tx.taxes ? `${symbol}${(tx.taxes * thbMul).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${code}` : '—';
             return (
               <>
                 <DetailRow label="Shares"   value={tx.shares != null ? tx.shares.toLocaleString('en-US', { maximumFractionDigits: 8 }) : '—'} />
@@ -1395,6 +1416,14 @@ function EditTransactionForm({ tx, onCancel, onSaved }) {
 
   const fxNumEdit = parseFloat(fxRate) || FX_RATE;
   const toUsdEdit = (v, ccy) => (ccy === 'THB' ? v / fxNumEdit : v);
+  const convertValueEdit = (raw, fromCcy, toCcy) => {
+    if (raw === '' || fromCcy === toCcy) return raw;
+    const num = parseFloat(raw);
+    if (!isFinite(num)) return raw;
+    const usd = fromCcy === 'THB' ? num / fxNumEdit : num;
+    const out = toCcy === 'THB' ? usd * fxNumEdit : usd;
+    return String(Number(out.toFixed(6)));
+  };
   const totalAmount = useMemo(() => {
     const q = parseFloat(shares) || 0;
     const pr = toUsdEdit(parseFloat(price) || 0, priceCcy);
@@ -1455,11 +1484,10 @@ function EditTransactionForm({ tx, onCancel, onSaved }) {
                     type="button"
                     onClick={() => {
                       setEntryCcy(c);
-                      if (c === 'THB') {
-                        setPriceCcy('THB'); setFeesCcy('THB'); setTaxesCcy('THB');
-                      } else {
-                        setPriceCcy('USD'); setFeesCcy('USD'); setTaxesCcy('USD');
-                      }
+                      setPrice(convertValueEdit(price, priceCcy, c));
+                      setFees(convertValueEdit(fees, feesCcy, c));
+                      setTaxes(convertValueEdit(taxes, taxesCcy, c));
+                      setPriceCcy(c); setFeesCcy(c); setTaxesCcy(c);
                     }}
                     className="field-input"
                     style={{
@@ -1508,7 +1536,7 @@ function EditTransactionForm({ tx, onCancel, onSaved }) {
             <label>{action === 'Sell' ? 'Sale' : 'Purchase'} Price / sh</label>
             <div className="field-with-suffix">
               <input className="field-input" placeholder={`e.g. ${fmtCurrencySym(priceCcy)}150.00`} value={price} onChange={e => setPrice(e.target.value)} inputMode="decimal" />
-              <CurrencySuffix value={priceCcy} onChange={setPriceCcy} />
+              <CurrencySuffix value={priceCcy} onChange={c => { setPrice(convertValueEdit(price, priceCcy, c)); setPriceCcy(c); }} />
             </div>
           </div>
 
@@ -1516,7 +1544,7 @@ function EditTransactionForm({ tx, onCancel, onSaved }) {
             <label>Fees</label>
             <div className="field-with-suffix">
               <input className="field-input" value={fees} onChange={e => setFees(e.target.value)} inputMode="decimal" />
-              <CurrencySuffix value={feesCcy} onChange={setFeesCcy} />
+              <CurrencySuffix value={feesCcy} onChange={c => { setFees(convertValueEdit(fees, feesCcy, c)); setFeesCcy(c); }} />
             </div>
           </div>
 
@@ -1524,7 +1552,7 @@ function EditTransactionForm({ tx, onCancel, onSaved }) {
             <label>Taxes</label>
             <div className="field-with-suffix">
               <input className="field-input" value={taxes} onChange={e => setTaxes(e.target.value)} inputMode="decimal" />
-              <CurrencySuffix value={taxesCcy} onChange={setTaxesCcy} />
+              <CurrencySuffix value={taxesCcy} onChange={c => { setTaxes(convertValueEdit(taxes, taxesCcy, c)); setTaxesCcy(c); }} />
             </div>
           </div>
 

@@ -190,6 +190,27 @@ export default function ReturnChart({ portfolio = 'All', totalNow, totalCost, tr
     return sign + fmtCurrency(abs, cur.currency, { decimals: 2 });
   };
 
+  const isEmpty = supabaseEnabled && !series && (!transactions || transactions.length === 0);
+
+  if (isEmpty) {
+    return (
+      <div className="card chart-card">
+        <div className="card-head">
+          <div>
+            <div className="card-title">Portfolio Return</div>
+            <div className="card-sub">{portfolio === 'All' ? 'All portfolios' : portfolio}</div>
+          </div>
+        </div>
+        <div style={{ display: 'grid', placeItems: 'center', height: 280, color: 'var(--text-faint)', fontSize: 13, textAlign: 'center' }}>
+          <div>
+            <div style={{ fontSize: 14, color: 'var(--text-dim)', marginBottom: 6 }}>No data yet</div>
+            <div>Add a transaction to start tracking returns.</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="card chart-card">
       <div className="card-head">

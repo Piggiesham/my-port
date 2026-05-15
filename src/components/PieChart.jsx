@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useEffect, useContext } from 'react';
-import { CurrencyContext, ASSETS, TOTAL_NOW, CATEGORIES, categoryDataFor, fmtCurrency } from '../data.js';
+import { CurrencyContext, ASSETS, CATEGORIES, categoryDataFor, fmtCurrency } from '../data.js';
 
-export default function PieChart({ assets = ASSETS, totalNow = TOTAL_NOW, portfolio = 'All' }) {
+export default function PieChart({ assets = ASSETS, totalNow = 0, portfolio = 'All' }) {
   const cur = useContext(CurrencyContext);
   const [category, setCategory] = useState('By Asset Type');
   const [open, setOpen] = useState(false);

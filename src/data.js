@@ -87,8 +87,6 @@ export function categoryDataFor(assets) {
   };
 }
 
-export const CATEGORY_DATA = categoryDataFor(ASSETS);
-
 function genSeries(points, startVal, endVal, volatility, seed) {
   let s = seed;
   function rng() { s = (s * 9301 + 49297) % 233280; return s / 233280; }
@@ -111,15 +109,6 @@ export const RANGES = {
   '6M':  { points: 90,  label: 'Past 6 months' },
   '1Y':  { points: 120, label: 'Past 12 months' },
   'ALL': { points: 180, label: 'All time' },
-};
-
-export const SERIES = {
-  '1W':  genSeries(24,  TOTAL_NOW * 0.985, TOTAL_NOW, 0.005, 11),
-  '1M':  genSeries(30,  TOTAL_NOW * 0.94,  TOTAL_NOW, 0.012, 22),
-  '3M':  genSeries(60,  TOTAL_NOW * 0.88,  TOTAL_NOW, 0.018, 33),
-  '6M':  genSeries(90,  TOTAL_NOW * 0.79,  TOTAL_NOW, 0.022, 44),
-  '1Y':  genSeries(120, TOTAL_NOW * 0.71,  TOTAL_NOW, 0.028, 55),
-  'ALL': genSeries(180, TOTAL_COST,        TOTAL_NOW, 0.035, 66),
 };
 
 export const SERIES_BY_PORTFOLIO = {};

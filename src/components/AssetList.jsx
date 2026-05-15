@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect, useContext } from 'react';
-import { CurrencyContext, ASSETS, SOURCES, FX_RATE, fmtCurrency, fmtCurrencyCode } from '../data.js';
+import { CurrencyContext, ASSETS, SOURCES, fmtCurrency, fmtCurrencyCode } from '../data.js';
 
 const SORT_OPTIONS = [
   { key: 'holdingUSD', label: 'Holding Value' },
@@ -10,13 +10,11 @@ const SORT_OPTIONS = [
   { key: 'ticker',     label: 'Ticker (A-Z)' },
 ];
 
-const PL_MODES = ['Unrealized P/L', 'Realized P/L', 'Total P/L'];
-
 export default function AssetList({ assets = ASSETS, portfolio = 'All' }) {
   const cur = useContext(CurrencyContext);
+  const fx = cur.fxRate || 32.27;
   const [sortKey, setSortKey] = useState('holdingUSD');
   const [sortOpen, setSortOpen] = useState(false);
-  const [plMode, setPlMode] = useState('Unrealized P/L');
   const sortRef = useRef(null);
 
   useEffect(() => {
@@ -32,25 +30,20 @@ export default function AssetList({ assets = ASSETS, portfolio = 'All' }) {
     if (sortKey === 'ticker') {
       arr.sort((a, b) => a.ticker.localeCompare(b.ticker));
     } else {
-      arr.sort((a, b) => b[sortKey] - a[sortKey]);
+      arr.sort((a, b) => (Number(b[sortKey]) || 0) - (Number(a[sortKey]) || 0));
     }
     return arr;
   }, [sortKey, assets]);
 
-  const cyclePlMode = () => {
-    const i = PL_MODES.indexOf(plMode);
-    setPlMode(PL_MODES[(i + 1) % PL_MODES.length]);
-  };
-
   const fmtPrice = (a) => {
-    if (a.isCash) return cur.currency === 'THB' && a.ticker === 'THB' ? '1.00' : (cur.currency === 'USD' && a.ticker === 'USD' ? '1.00' : (a.price * (cur.currency === 'THB' ? FX_RATE : 1)).toFixed(4));
-    const v = a.price * (cur.currency === 'THB' ? FX_RATE : 1);
+    if (a.isCash) return '—';
+    const v = a.price * (cur.currency === 'THB' ? fx : 1);
     return v >= 1000 ? v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : v.toFixed(2);
   };
 
   const altCurrency = cur.currency === 'USD' ? 'THB' : 'USD';
   const fmtAltHolding = (usd) => {
-    const v = altCurrency === 'THB' ? usd * FX_RATE : usd;
+    const v = altCurrency === 'THB' ? usd * fx : usd;
     return v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ' + altCurrency;
   };
 
@@ -77,12 +70,6 @@ export default function AssetList({ assets = ASSETS, portfolio = 'All' }) {
           )}
         </div>
 
-        <button className="pill-btn" onClick={cyclePlMode} title="Cycle P/L mode">
-          <span>{plMode}</span>
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" style={{ color: 'var(--text-dim)' }}>
-            <path d="M3 5l3-3M3 5l3 3M3 5h7M11 9l-3 3M11 9l-3-3M11 9H4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
-          </svg>
-        </button>
       </div>
 
       <div className="list-head">
@@ -133,7 +120,7 @@ export default function AssetList({ assets = ASSETS, portfolio = 'All' }) {
 
             <div className="cell-r" data-label="Holding">
               <div>
-                <div className="price-main">{a.holdingUSD === 0 ? '0.00' : (cur.currency === 'THB' ? (a.holdingUSD * FX_RATE) : a.holdingUSD).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+                <div className="price-main">{a.holdingUSD === 0 ? '0.00' : (cur.currency === 'THB' ? (a.holdingUSD * fx) : a.holdingUSD).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
                 <div className="price-sub">≈ {fmtAltHolding(a.holdingUSD)}</div>
               </div>
             </div>
