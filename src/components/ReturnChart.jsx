@@ -74,11 +74,21 @@ export default function ReturnChart({ portfolio = 'All', totalNow, totalCost, tr
 
   const data = useMemo(() => {
     if (series) return series.map(s => s.value);
+    if (supabaseEnabled) {
+      const v = Number.isFinite(totalNow) ? totalNow : 0;
+      return [v, v];
+    }
     return (SERIES_BY_PORTFOLIO[portfolio] || SERIES_BY_PORTFOLIO['All'])[range];
-  }, [series, portfolio, range]);
+  }, [series, portfolio, range, totalNow]);
 
   const dates = useMemo(() => {
     if (series) return series.map(s => s.date);
+    if (supabaseEnabled) {
+      const days = RANGE_DAYS[range];
+      const end = new Date();
+      const start = isFinite(days) ? new Date(Date.now() - days * 86400000) : new Date(end);
+      return [start, end];
+    }
     return dateLabelsFor(range);
   }, [series, range]);
 
@@ -111,7 +121,7 @@ export default function ReturnChart({ portfolio = 'All', totalNow, totalCost, tr
 
   const startVal = data[0];
   const endVal = data[data.length - 1];
-  const pctChange = ((endVal - startVal) / startVal) * 100;
+  const pctChange = startVal ? ((endVal - startVal) / startVal) * 100 : 0;
   const dollarChange = endVal - startVal;
   const up = pctChange >= 0;
 

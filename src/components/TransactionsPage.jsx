@@ -238,6 +238,11 @@ export default function TransactionsPage({ transactions = MOCK_TRANSACTIONS, ass
                         {sign}{fmtCurrency(t.valueUSD, cur.currency, { decimals: 2 }).replace(/^[$฿]/, fmtCurrencySym(cur.currency))}
                         <span className="code">{fmtCurrencyCode(cur.currency)}</span>
                       </span>
+                      {cur.currency === 'USD' && (
+                        <span style={{ display: 'block', fontSize: 11, color: 'var(--text-faint)', marginTop: 2 }}>
+                          ≈ ฿{(t.valueUSD * (t.fx_rate_at_tx ?? FX_RATE)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} THB
+                        </span>
+                      )}
                     </div>
                   </div>
                 );
@@ -266,12 +271,56 @@ export default function TransactionsPage({ transactions = MOCK_TRANSACTIONS, ass
   );
 }
 
+function CurrencySuffix({ value, onChange }) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef(null);
+  useEffect(() => {
+    const onClick = (e) => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, []);
+  return (
+    <span
+      className="field-suffix"
+      ref={wrapRef}
+      style={{ cursor: 'pointer', position: 'relative', userSelect: 'none' }}
+      onClick={() => setOpen(o => !o)}
+    >
+      {value}
+      <svg width="10" height="10" viewBox="0 0 10 10" fill="none" style={{ transition: 'transform 0.18s', transform: open ? 'rotate(180deg)' : 'none' }}>
+        <path d="M2 4l3 3 3-3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+      </svg>
+      {open && (
+        <div className="dropdown-menu" style={{ minWidth: 96, right: 0, top: 'calc(100% + 6px)' }}>
+          {['USD', 'THB'].map(c => (
+            <button
+              key={c}
+              type="button"
+              className={`dropdown-item${c === value ? ' selected' : ''}`}
+              onClick={(e) => { e.stopPropagation(); onChange(c); setOpen(false); }}
+            >
+              <span>{c}</span>
+              {c === value && <span style={{ color: 'var(--accent)' }}>✓</span>}
+            </button>
+          ))}
+        </div>
+      )}
+    </span>
+  );
+}
+
 function AddTransactionModal({ onClose, onAdded }) {
   const cur = useContext(CurrencyContext);
   const [portfolio, setPortfolio] = useState(null);
   const [assetType, setAssetType] = useState(null);
   const [txType, setTxType] = useState('Buy');
   const [ticker, setTicker] = useState('');
+  const [depositCcy, setDepositCcy] = useState('USD'); // USD | THB, only used for Deposit/Withdraw
+  const [entryCcy, setEntryCcy] = useState('USD');     // top toggle, default amounts to USD
+  const [fxRate, setFxRate] = useState(String(FX_RATE)); // THB per USD, user-editable when entryCcy='THB'
+  const [priceCcy, setPriceCcy] = useState('USD');
+  const [feesCcy, setFeesCcy] = useState('USD');
+  const [taxesCcy, setTaxesCcy] = useState('USD');
   const [catalog, setCatalog] = useState([]);
   const [catalogVersion, setCatalogVersion] = useState(0);
 
@@ -348,17 +397,33 @@ function AddTransactionModal({ onClose, onAdded }) {
     setAssetType(PORTFOLIO_TYPES[p][0]);
   };
 
+  const isCashFlow = txType === 'Deposit' || txType === 'Withdraw';
+  const fxNum = parseFloat(fxRate) || FX_RATE;
+  const toUsd = (v, ccy) => (ccy === 'THB' ? v / fxNum : v);
+  const anyThb = !isCashFlow && (priceCcy === 'THB' || feesCcy === 'THB' || taxesCcy === 'THB');
+
   const totalAmount = useMemo(() => {
     const q = parseFloat(qty) || 0;
-    const pr = parseFloat(price) || 0;
-    const f = parseFloat(fees) || 0;
-    const t = parseFloat(taxes) || 0;
+    if (isCashFlow) {
+      const f = parseFloat(fees) || 0;
+      const t = parseFloat(taxes) || 0;
+      const base = q * 1;
+      if (txType === 'Withdraw') return base - f - t;
+      return base + f + t;
+    }
+    const prRaw = parseFloat(price) || 0;
+    const fRaw = parseFloat(fees) || 0;
+    const tRaw = parseFloat(taxes) || 0;
+    const pr = toUsd(prRaw, priceCcy);
+    const f  = toUsd(fRaw, feesCcy);
+    const t  = toUsd(tRaw, taxesCcy);
     const base = q * pr;
     if (txType === 'Sell') return base - f - t;
     return base + f + t;
-  }, [qty, price, fees, taxes, txType]);
+  }, [qty, price, fees, taxes, txType, isCashFlow, priceCcy, feesCcy, taxesCcy, fxNum]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const symbol = fmtCurrencySym(cur.currency);
+  const displaySymbol = isCashFlow ? fmtCurrencySym(depositCcy) : (anyThb ? '$' : symbol);
   const txTypeOptions = ['Buy', 'Sell', 'Dividend', 'Deposit', 'Withdraw'];
 
   if (!portfolio) {
@@ -442,21 +507,101 @@ function AddTransactionModal({ onClose, onAdded }) {
             </div>
           </div>
 
-          <div className="field">
-            <label>Add {assetType}</label>
-            <AssetSearchInput
-              assetType={assetType}
-              catalog={catalog}
-              value={ticker}
-              onChange={setTicker}
-              onAssetCreated={() => setCatalogVersion(v => v + 1)}
-              placeholder={placeholderTicker}
-            />
-          </div>
+          {!isCashFlow && (
+            <div className="field">
+              <label>Entry Currency</label>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>
+                <div style={{ display: 'flex', gap: 8, flex: '0 0 auto' }}>
+                  {['USD', 'THB'].map(c => (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => {
+                        setEntryCcy(c);
+                        if (c === 'THB') {
+                          setPriceCcy('THB'); setFeesCcy('THB'); setTaxesCcy('THB');
+                          if (!fxRate) setFxRate(String(FX_RATE));
+                        } else {
+                          setPriceCcy('USD'); setFeesCcy('USD'); setTaxesCcy('USD');
+                        }
+                      }}
+                      className="field-input"
+                      style={{
+                        cursor: 'pointer',
+                        fontWeight: 600,
+                        padding: '0 18px',
+                        borderColor: entryCcy === c ? 'var(--accent)' : undefined,
+                        color: entryCcy === c ? 'var(--accent)' : 'var(--text)',
+                      }}
+                    >
+                      {c}
+                    </button>
+                  ))}
+                </div>
+                {entryCcy === 'THB' && (
+                  <div className="field-with-suffix" style={{ flex: 1 }}>
+                    <input
+                      className="field-input"
+                      inputMode="decimal"
+                      placeholder="THB per USD"
+                      value={fxRate}
+                      onChange={e => setFxRate(e.target.value)}
+                    />
+                    <span className="field-suffix">THB / USD</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {!isCashFlow && (
+            <div className="field">
+              <label>Add {assetType}</label>
+              <AssetSearchInput
+                assetType={assetType}
+                catalog={catalog}
+                value={ticker}
+                onChange={setTicker}
+                onAssetCreated={() => setCatalogVersion(v => v + 1)}
+                placeholder={placeholderTicker}
+              />
+            </div>
+          )}
+
+          {isCashFlow && (
+            <div className="field">
+              <label>Currency</label>
+              <div style={{ display: 'flex', gap: 8 }}>
+                {['USD', 'THB'].map(c => (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => setDepositCcy(c)}
+                    className="field-input"
+                    style={{
+                      flex: 1,
+                      cursor: 'pointer',
+                      fontWeight: 600,
+                      borderColor: depositCcy === c ? 'var(--accent)' : undefined,
+                      color: depositCcy === c ? 'var(--accent)' : 'var(--text)',
+                    }}
+                  >
+                    {c}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="field">
-            <label>Quantity</label>
-            <input className="field-input" placeholder="e.g. 10" value={qty} onChange={e => setQty(e.target.value)} inputMode="decimal" />
+            <label>{isCashFlow ? `Amount (${depositCcy})` : 'Quantity'}</label>
+            <input
+              className="field-input"
+              placeholder={isCashFlow ? `e.g. ${fmtCurrencySym(depositCcy)}1,000.00` : 'e.g. 10'}
+              value={qty}
+              onChange={e => setQty(e.target.value)}
+              inputMode="decimal"
+            />
           </div>
 
           <div className="field">
@@ -495,27 +640,24 @@ function AddTransactionModal({ onClose, onAdded }) {
             </div>
           </div>
 
+          {!isCashFlow && (
           <div className="field">
             <label>{txType === 'Sell' ? 'Sale' : 'Purchase'} Price</label>
             <div className="field-with-suffix">
               <input
                 className="field-input"
-                placeholder={priceLoading ? 'Fetching…' : `e.g. ${symbol}150.00`}
+                placeholder={priceLoading ? 'Fetching…' : `e.g. ${fmtCurrencySym(priceCcy)}150.00`}
                 value={price}
                 onChange={e => { setPrice(e.target.value); setPriceAutoFilled(false); }}
                 inputMode="decimal"
               />
-              <span className="field-suffix">
-                {fmtCurrencyCode(cur.currency)}
-                <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-                  <path d="M2 4l3 3 3-3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                </svg>
-              </span>
+              <CurrencySuffix value={priceCcy} onChange={setPriceCcy} />
             </div>
             {priceAutoFilled && !priceLoading && (
               <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 4 }}>Auto-filled from Yahoo Finance · close on {dateIso}</div>
             )}
           </div>
+          )}
 
           <div className={`adv-toggle${advOpen ? ' open' : ''}`} onClick={() => setAdvOpen(o => !o)}>
             <span className="adv-title">Advanced transaction input</span>
@@ -540,26 +682,16 @@ function AddTransactionModal({ onClose, onAdded }) {
               <div className="field">
                 <label>Trading costs / FX fees</label>
                 <div className="field-with-suffix">
-                  <input className="field-input" placeholder={`e.g. ${symbol}10.00`} value={fees} onChange={e => setFees(e.target.value)} inputMode="decimal" />
-                  <span className="field-suffix">
-                    {fmtCurrencyCode(cur.currency)}
-                    <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-                      <path d="M2 4l3 3 3-3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                    </svg>
-                  </span>
+                  <input className="field-input" placeholder={`e.g. ${fmtCurrencySym(feesCcy)}10.00`} value={fees} onChange={e => setFees(e.target.value)} inputMode="decimal" />
+                  <CurrencySuffix value={feesCcy} onChange={setFeesCcy} />
                 </div>
               </div>
 
               <div className="field">
                 <label>Taxes</label>
                 <div className="field-with-suffix">
-                  <input className="field-input" placeholder={`e.g. ${symbol}15.00`} value={taxes} onChange={e => setTaxes(e.target.value)} inputMode="decimal" />
-                  <span className="field-suffix">
-                    {fmtCurrencyCode(cur.currency)}
-                    <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-                      <path d="M2 4l3 3 3-3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                    </svg>
-                  </span>
+                  <input className="field-input" placeholder={`e.g. ${fmtCurrencySym(taxesCcy)}15.00`} value={taxes} onChange={e => setTaxes(e.target.value)} inputMode="decimal" />
+                  <CurrencySuffix value={taxesCcy} onChange={setTaxesCcy} />
                 </div>
               </div>
 
@@ -574,7 +706,7 @@ function AddTransactionModal({ onClose, onAdded }) {
         <div className="modal-foot">
           <div className="total-row">
             <span className="total-label">Total Amount</span>
-            <span className="total-val">{symbol}{totalAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+            <span className="total-val">{displaySymbol}{totalAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
           </div>
           {error && (
             <div style={{ fontSize: 13, color: 'var(--red)', marginBottom: 10, padding: '8px 12px', background: 'rgba(248,113,113,0.1)', borderRadius: 8 }}>
@@ -584,24 +716,36 @@ function AddTransactionModal({ onClose, onAdded }) {
           <div className="btn-stack">
             <button
               className="btn-primary"
-              disabled={submitting || !ticker || !qty}
-              style={{ opacity: (submitting || !ticker || !qty) ? 0.5 : 1 }}
+              disabled={submitting || (!isCashFlow && !ticker) || !qty}
+              style={{ opacity: (submitting || (!isCashFlow && !ticker) || !qty) ? 0.5 : 1 }}
               onClick={async () => {
                 setSubmitting(true);
                 setError(null);
                 try {
                   const executedAt = new Date(`${dateIso}T${time}:00`).toISOString();
+                  const amount = parseFloat(qty) || 0;
+                  const submitTicker = isCashFlow ? depositCcy : ticker.toUpperCase().trim();
+                  const fx = parseFloat(fxRate) || FX_RATE;
+                  const priceUsd = isCashFlow
+                    ? 1
+                    : (price === '' ? null : toUsd(parseFloat(price) || 0, priceCcy));
+                  const feesUsd  = isCashFlow ? (parseFloat(fees) || 0) : toUsd(parseFloat(fees) || 0, feesCcy);
+                  const taxesUsd = isCashFlow ? (parseFloat(taxes) || 0) : toUsd(parseFloat(taxes) || 0, taxesCcy);
+                  const submitValueUsd = isCashFlow
+                    ? (depositCcy === 'THB' ? amount / fx : amount)
+                    : (totalAmount || (amount * (priceUsd || 0)) || 0);
                   await addTransaction({
                     portfolio,
-                    ticker: ticker.toUpperCase().trim(),
+                    ticker: submitTicker,
                     action: txType,
-                    shares: parseFloat(qty) || null,
-                    price: parseFloat(price) || null,
-                    valueUsd: totalAmount || (parseFloat(qty) * parseFloat(price)) || 0,
-                    fees: parseFloat(fees) || 0,
-                    taxes: parseFloat(taxes) || 0,
+                    shares: amount || null,
+                    price: priceUsd,
+                    valueUsd: submitValueUsd,
+                    fees: feesUsd,
+                    taxes: taxesUsd,
                     description,
                     executedAt,
+                    fxRateAtTx: fx,
                   });
                   onAdded?.();
                 } catch (err) {
@@ -911,7 +1055,7 @@ function AssetSearchInput({ assetType, catalog, value, onChange, onAssetCreated,
   }, [query, catalog, matches, allowedTypes]);
 
   const exactMatch = matches.find(a => a.ticker.toUpperCase() === query.trim().toUpperCase());
-  const showCreateRow = query.trim().length > 0 && !exactMatch && remote.length === 0 && !remoteBusy && allowedTypes.length > 0;
+  const showCreateRow = query.trim().length > 0 && !exactMatch && !remoteBusy && allowedTypes.length > 0;
 
   const pick = (asset) => {
     setQuery(asset.ticker);
@@ -993,12 +1137,12 @@ function AssetSearchInput({ assetType, catalog, value, onChange, onAssetCreated,
               type="button"
               className="dropdown-item"
               onClick={() => pick(a)}
-              style={{ alignItems: 'center', gap: 10 }}
+              style={{ alignItems: 'center', justifyContent: 'flex-start', gap: 10 }}
             >
-              <span className="logo" style={{ width: 26, height: 26, borderRadius: 6, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, background: a.logo_bg || '#333', color: a.logo_dark ? '#0a0a0b' : 'white' }}>
+              <span className="logo" style={{ flexShrink: 0, width: 26, height: 26, borderRadius: 6, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, background: a.logo_bg || '#333', color: a.logo_dark ? '#0a0a0b' : 'white' }}>
                 {a.logo_text || a.ticker[0]}
               </span>
-              <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}>
+              <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2, minWidth: 0 }}>
                 <span style={{ fontWeight: 600 }}>{a.ticker}</span>
                 <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>{a.name} · {a.type}</span>
               </span>
@@ -1017,12 +1161,12 @@ function AssetSearchInput({ assetType, catalog, value, onChange, onAssetCreated,
               className="dropdown-item"
               onClick={() => pickRemote(r)}
               disabled={addingRemote === r.symbol}
-              style={{ alignItems: 'center', gap: 10, opacity: addingRemote === r.symbol ? 0.5 : 1 }}
+              style={{ alignItems: 'center', justifyContent: 'flex-start', gap: 10, opacity: addingRemote === r.symbol ? 0.5 : 1 }}
             >
-              <span className="logo" style={{ width: 26, height: 26, borderRadius: 6, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, background: '#333', color: 'white' }}>
+              <span className="logo" style={{ flexShrink: 0, width: 26, height: 26, borderRadius: 6, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, background: '#333', color: 'white' }}>
                 {r.symbol[0]}
               </span>
-              <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2, flex: 1 }}>
+              <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2, flex: 1, minWidth: 0 }}>
                 <span style={{ fontWeight: 600 }}>{r.symbol}</span>
                 <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>{r.name} · {r.mappedType}{r.exchange ? ` · ${r.exchange}` : ''}</span>
               </span>
@@ -1037,7 +1181,7 @@ function AssetSearchInput({ assetType, catalog, value, onChange, onAssetCreated,
               onClick={startCreate}
               style={{ color: 'var(--accent)' }}
             >
-              <span>+ Add “{query.trim().toUpperCase()}” as new {assetType}</span>
+              <span>+ Add custom ticker “{query.trim().toUpperCase()}” ({assetType})</span>
             </button>
           )}
 
@@ -1138,11 +1282,30 @@ function TransactionDetailModal({ tx, assetMap, onClose, onChanged }) {
             </div>
           </div>
 
-          <DetailRow label="Shares"   value={tx.shares != null ? tx.shares.toLocaleString('en-US', { maximumFractionDigits: 8 }) : '—'} />
-          <DetailRow label="Price/sh" value={tx.price != null ? `${symbol}${(tx.price * (cur.currency === 'THB' ? FX_RATE : 1)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 6 })} ${code}` : '—'} />
-          <DetailRow label="Value"    value={`${symbol}${(tx.valueUSD * (cur.currency === 'THB' ? FX_RATE : 1)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${code}`} />
-          <DetailRow label="Fees"     value={tx.fees ? `${symbol}${(tx.fees * (cur.currency === 'THB' ? FX_RATE : 1)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${code}` : '—'} />
-          <DetailRow label="Taxes"    value={tx.taxes ? `${symbol}${(tx.taxes * (cur.currency === 'THB' ? FX_RATE : 1)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${code}` : '—'} />
+          {(() => {
+            const fx = tx.fx_rate_at_tx ?? FX_RATE;
+            const aux = (usdAmt, dec = 2) => cur.currency === 'USD' ? (
+              <span style={{ display: 'block', fontSize: 11, color: 'var(--text-faint)', marginTop: 2 }}>
+                ≈ ฿{(usdAmt * fx).toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec })} THB
+              </span>
+            ) : null;
+            const mainPrice = tx.price != null ? `${symbol}${(tx.price * (cur.currency === 'THB' ? FX_RATE : 1)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 6 })} ${code}` : '—';
+            const mainValue = `${symbol}${(tx.valueUSD * (cur.currency === 'THB' ? FX_RATE : 1)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${code}`;
+            const mainFees  = tx.fees  ? `${symbol}${(tx.fees * (cur.currency === 'THB' ? FX_RATE : 1)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${code}` : '—';
+            const mainTaxes = tx.taxes ? `${symbol}${(tx.taxes * (cur.currency === 'THB' ? FX_RATE : 1)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${code}` : '—';
+            return (
+              <>
+                <DetailRow label="Shares"   value={tx.shares != null ? tx.shares.toLocaleString('en-US', { maximumFractionDigits: 8 }) : '—'} />
+                <DetailRow label="Price/sh" value={<><span>{mainPrice}</span>{tx.price != null && aux(tx.price, 6)}</>} />
+                <DetailRow label="Value"    value={<><span>{mainValue}</span>{aux(tx.valueUSD)}</>} />
+                <DetailRow label="Fees"     value={<><span>{mainFees}</span>{tx.fees ? aux(tx.fees) : null}</>} />
+                <DetailRow label="Taxes"    value={<><span>{mainTaxes}</span>{tx.taxes ? aux(tx.taxes) : null}</>} />
+                {cur.currency === 'USD' && (
+                  <DetailRow label="FX at tx" value={`${fx.toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 })} THB / USD`} />
+                )}
+              </>
+            );
+          })()}
           <DetailRow label="Executed" value={new Date(tx.date).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })} />
           {tx.description && <DetailRow label="Note" value={tx.description} />}
         </div>
@@ -1198,7 +1361,6 @@ function DetailRow({ label, value }) {
 // holdings reconciliation.
 // ============================================================================
 function EditTransactionForm({ tx, onCancel, onSaved }) {
-  const cur = useContext(CurrencyContext);
   const [action, setAction] = useState(tx.action);
   const [actionOpen, setActionOpen] = useState(false);
   const [shares, setShares] = useState(tx.shares != null ? String(tx.shares) : '');
@@ -1206,6 +1368,11 @@ function EditTransactionForm({ tx, onCancel, onSaved }) {
   const [fees, setFees] = useState(tx.fees ? String(tx.fees) : '');
   const [taxes, setTaxes] = useState(tx.taxes ? String(tx.taxes) : '');
   const [description, setDescription] = useState(tx.description || '');
+  const [entryCcy, setEntryCcy] = useState('USD');
+  const [fxRate, setFxRate] = useState(String(tx.fx_rate_at_tx ?? FX_RATE));
+  const [priceCcy, setPriceCcy] = useState('USD');
+  const [feesCcy, setFeesCcy] = useState('USD');
+  const [taxesCcy, setTaxesCcy] = useState('USD');
   const initialDate = new Date(tx.date);
   const pad = (n) => String(n).padStart(2, '0');
   const [date, setDate] = useState(`${initialDate.getFullYear()}-${pad(initialDate.getMonth() + 1)}-${pad(initialDate.getDate())}`);
@@ -1226,16 +1393,17 @@ function EditTransactionForm({ tx, onCancel, onSaved }) {
     return () => window.removeEventListener('keydown', onKey);
   }, [onCancel, busy]);
 
-  const symbol = fmtCurrencySym(cur.currency);
+  const fxNumEdit = parseFloat(fxRate) || FX_RATE;
+  const toUsdEdit = (v, ccy) => (ccy === 'THB' ? v / fxNumEdit : v);
   const totalAmount = useMemo(() => {
     const q = parseFloat(shares) || 0;
-    const pr = parseFloat(price) || 0;
-    const f = parseFloat(fees) || 0;
-    const t = parseFloat(taxes) || 0;
+    const pr = toUsdEdit(parseFloat(price) || 0, priceCcy);
+    const f = toUsdEdit(parseFloat(fees) || 0, feesCcy);
+    const t = toUsdEdit(parseFloat(taxes) || 0, taxesCcy);
     const base = q * pr;
     if (action === 'Sell') return base - f - t;
     return base + f + t;
-  }, [shares, price, fees, taxes, action]);
+  }, [shares, price, fees, taxes, action, priceCcy, feesCcy, taxesCcy, fxNumEdit]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const txTypeOptions = ['Buy', 'Sell', 'Dividend', 'Deposit', 'Withdraw'];
 
@@ -1278,6 +1446,50 @@ function EditTransactionForm({ tx, onCancel, onSaved }) {
           </div>
 
           <div className="field">
+            <label>Entry Currency</label>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>
+              <div style={{ display: 'flex', gap: 8, flex: '0 0 auto' }}>
+                {['USD', 'THB'].map(c => (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => {
+                      setEntryCcy(c);
+                      if (c === 'THB') {
+                        setPriceCcy('THB'); setFeesCcy('THB'); setTaxesCcy('THB');
+                      } else {
+                        setPriceCcy('USD'); setFeesCcy('USD'); setTaxesCcy('USD');
+                      }
+                    }}
+                    className="field-input"
+                    style={{
+                      cursor: 'pointer',
+                      fontWeight: 600,
+                      padding: '0 18px',
+                      borderColor: entryCcy === c ? 'var(--accent)' : undefined,
+                      color: entryCcy === c ? 'var(--accent)' : 'var(--text)',
+                    }}
+                  >
+                    {c}
+                  </button>
+                ))}
+              </div>
+              {entryCcy === 'THB' && (
+                <div className="field-with-suffix" style={{ flex: 1 }}>
+                  <input
+                    className="field-input"
+                    inputMode="decimal"
+                    placeholder="THB per USD"
+                    value={fxRate}
+                    onChange={e => setFxRate(e.target.value)}
+                  />
+                  <span className="field-suffix">THB / USD</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="field">
             <label>Quantity</label>
             <input className="field-input" value={shares} onChange={e => setShares(e.target.value)} inputMode="decimal" />
           </div>
@@ -1293,18 +1505,27 @@ function EditTransactionForm({ tx, onCancel, onSaved }) {
           </div>
 
           <div className="field">
-            <label>{action === 'Sell' ? 'Sale' : 'Purchase'} Price (USD/sh)</label>
-            <input className="field-input" placeholder={`e.g. ${symbol}150.00`} value={price} onChange={e => setPrice(e.target.value)} inputMode="decimal" />
+            <label>{action === 'Sell' ? 'Sale' : 'Purchase'} Price / sh</label>
+            <div className="field-with-suffix">
+              <input className="field-input" placeholder={`e.g. ${fmtCurrencySym(priceCcy)}150.00`} value={price} onChange={e => setPrice(e.target.value)} inputMode="decimal" />
+              <CurrencySuffix value={priceCcy} onChange={setPriceCcy} />
+            </div>
           </div>
 
           <div className="field">
-            <label>Fees (USD)</label>
-            <input className="field-input" value={fees} onChange={e => setFees(e.target.value)} inputMode="decimal" />
+            <label>Fees</label>
+            <div className="field-with-suffix">
+              <input className="field-input" value={fees} onChange={e => setFees(e.target.value)} inputMode="decimal" />
+              <CurrencySuffix value={feesCcy} onChange={setFeesCcy} />
+            </div>
           </div>
 
           <div className="field">
-            <label>Taxes (USD)</label>
-            <input className="field-input" value={taxes} onChange={e => setTaxes(e.target.value)} inputMode="decimal" />
+            <label>Taxes</label>
+            <div className="field-with-suffix">
+              <input className="field-input" value={taxes} onChange={e => setTaxes(e.target.value)} inputMode="decimal" />
+              <CurrencySuffix value={taxesCcy} onChange={setTaxesCcy} />
+            </div>
           </div>
 
           <div className="field">
@@ -1333,17 +1554,22 @@ function EditTransactionForm({ tx, onCancel, onSaved }) {
                 setError(null);
                 try {
                   const executedAt = new Date(`${date}T${time}:00`).toISOString();
+                  const fx = parseFloat(fxRate) || FX_RATE;
+                  const priceUsd = price === '' ? null : toUsdEdit(parseFloat(price) || 0, priceCcy);
+                  const feesUsd  = toUsdEdit(parseFloat(fees) || 0, feesCcy);
+                  const taxesUsd = toUsdEdit(parseFloat(taxes) || 0, taxesCcy);
                   await updateTransaction(tx.id, {
                     portfolio: tx.source,
                     ticker: tx.ticker,
                     action,
                     shares: parseFloat(shares) || null,
-                    price: parseFloat(price) || null,
+                    price: priceUsd,
                     valueUsd: totalAmount || 0,
-                    fees: parseFloat(fees) || 0,
-                    taxes: parseFloat(taxes) || 0,
+                    fees: feesUsd,
+                    taxes: taxesUsd,
                     description,
                     executedAt,
+                    fxRateAtTx: fx,
                   });
                   onSaved?.();
                 } catch (err) {

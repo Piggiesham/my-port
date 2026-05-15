@@ -97,7 +97,7 @@ export async function fetchTransactions() {
 
   const { data, error } = await supabase
     .from('transactions')
-    .select('id, brokerage_id, ticker, action, shares, price, value_usd, fees, taxes, description, executed_at')
+    .select('id, brokerage_id, ticker, action, shares, price, value_usd, fees, taxes, description, executed_at, fx_rate_at_tx')
     .order('executed_at', { ascending: false });
   if (error) throw error;
 
@@ -111,6 +111,7 @@ export async function fetchTransactions() {
     valueUSD: Number(t.value_usd),
     fees: t.fees == null ? 0 : Number(t.fees),
     taxes: t.taxes == null ? 0 : Number(t.taxes),
+    fx_rate_at_tx: t.fx_rate_at_tx == null ? null : Number(t.fx_rate_at_tx),
     description: t.description ?? '',
     source: BROKER_ID_TO_NAME[t.brokerage_id] ?? t.brokerage_id,
     status: 'Done',
@@ -136,6 +137,13 @@ export async function addTransaction(args) {
   if (!supabaseEnabled) throw new Error('Supabase not configured');
   const { data, error } = await supabase.rpc('apply_transaction', { tx: buildTxPayload(args) });
   if (error) throw error;
+  if (data && args.fxRateAtTx != null) {
+    const { error: fxErr } = await supabase
+      .from('transactions')
+      .update({ fx_rate_at_tx: args.fxRateAtTx })
+      .eq('id', data);
+    if (fxErr) console.warn('[tx] fx_rate_at_tx write failed', fxErr.message);
+  }
   return data; // new uuid
 }
 
@@ -146,6 +154,13 @@ export async function updateTransaction(txId, args) {
     new_tx: buildTxPayload(args),
   });
   if (error) throw error;
+  if (args.fxRateAtTx != null) {
+    const { error: fxErr } = await supabase
+      .from('transactions')
+      .update({ fx_rate_at_tx: args.fxRateAtTx })
+      .eq('id', txId);
+    if (fxErr) console.warn('[tx] fx_rate_at_tx write failed', fxErr.message);
+  }
 }
 
 export async function deleteTransaction(txId) {
