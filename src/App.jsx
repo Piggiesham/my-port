@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect, useCallback, Fragment } from 'react';
-import { CurrencyContext, SOURCES, PORTFOLIOS, ASSETS as MOCK_ASSETS, TRANSACTIONS as MOCK_TRANSACTIONS, totalsFor, fmtCurrency, FX_RATE, setFxRate } from './data.js';
+import { CurrencyContext, SOURCES, PORTFOLIOS, ASSETS as MOCK_ASSETS, TRANSACTIONS as MOCK_TRANSACTIONS, totalsFor, fmtCurrency, FX_RATE, setFxRate, fmtDateBkk } from './data.js';
 import { fetchTransactions, fetchFxRate, fetchPriceMap, fetchAssetCatalog, computeAssetsFromTransactions } from './lib/api.js';
 import { supabaseEnabled } from './lib/supabase.js';
 import ReturnChart from './components/ReturnChart.jsx';
@@ -87,8 +87,7 @@ export default function App() {
       <div className="app">
         <div className="topbar">
           <div className="brand">
-            <div className="brand-dot">P</div>
-            <span className="brand-text">My Port</span>
+            <span className="brand-text">my-port</span>
           </div>
           <div className="nav nav-desktop">
             {navItems.map((t) =>
@@ -181,7 +180,6 @@ export default function App() {
               <ReturnChart
                 portfolio={portfolio}
                 totalNow={totalNow}
-                totalCost={totalCost}
                 transactions={portfolio === 'All' ? transactions : transactions.filter(t => t.source === portfolio)}
                 priceMap={priceMap}
               />
@@ -190,7 +188,7 @@ export default function App() {
 
             <AssetList assets={filteredAssets} portfolio={portfolio} />
 
-            <div className="foot">Prices simulated · Not financial advice · {new Date().toLocaleDateString('en-US', { dateStyle: 'long' })}</div>
+            <div className="foot">Prices simulated · Not financial advice · {fmtDateBkk(new Date(), { dateStyle: 'long' })}</div>
           </Fragment>
         )}
 

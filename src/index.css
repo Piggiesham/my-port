@@ -203,7 +203,7 @@
   .btn-primary:hover { background: #e5e5e7; }
 
   .tx-month-head { font-size: 12px; color: var(--text-faint); letter-spacing: 0.06em; text-transform: uppercase; padding: 22px 24px 12px; font-weight: 500; }
-  .tx-row { display: grid; grid-template-columns: 1.6fr 1.2fr 1fr 1fr 1fr; gap: 16px; padding: 18px 24px; border-bottom: 1px solid var(--border); align-items: center; transition: background 0.12s; }
+  .tx-row { display: grid; grid-template-columns: 1.55fr 1.05fr 0.85fr 0.95fr 1fr 1fr; gap: 14px; padding: 18px 24px; border-bottom: 1px solid var(--border); align-items: center; transition: background 0.12s; }
   .tx-row:hover { background: rgba(255,255,255,0.02); }
   .tx-row .r { text-align: right; }
   .tx-row .c { text-align: center; }
@@ -233,7 +233,24 @@
   .tx-value.down { color: var(--red); }
   .tx-value .code { font-size: 12px; font-weight: 500; opacity: 0.8; margin-left: 4px; }
 
-  .tx-head-row { display: grid; grid-template-columns: 1.6fr 1.2fr 1fr 1fr 1fr; gap: 16px; padding: 14px 24px; font-size: 12px; color: var(--text-faint); border-bottom: 1px solid var(--border); border-top: 1px solid var(--border); background: rgba(0,0,0,0.2); }
+  .tx-head-row { display: grid; grid-template-columns: 1.55fr 1.05fr 0.85fr 0.95fr 1fr 1fr; gap: 14px; padding: 14px 24px; font-size: 12px; color: var(--text-faint); border-bottom: 1px solid var(--border); border-top: 1px solid var(--border); background: rgba(0,0,0,0.2); }
+  .tx-head-row .r { text-align: right; }
+  .tx-head-row .c { text-align: center; }
+
+  /* Asset Type filter chips above the list */
+  .type-filter-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 24px; }
+  .type-chip { padding: 5px 12px; border-radius: 999px; border: 1px solid var(--border); background: transparent; color: var(--text-dim); font-size: 12px; cursor: pointer; transition: background 0.12s, color 0.12s, border-color 0.12s; }
+  .type-chip:hover { color: var(--text); border-color: var(--text-faint); }
+  .type-chip.active { background: var(--text); color: var(--bg); border-color: var(--text); }
+
+  /* Asset Type pill on each row */
+  .type-pill { display: inline-block; padding: 3px 9px; border-radius: 999px; font-size: 11px; font-weight: 600; letter-spacing: 0.02em; border: 1px solid; }
+  .type-pill.type-stock     { color: #93c5fd; border-color: rgba(147,197,253,0.35); background: rgba(147,197,253,0.08); }
+  .type-pill.type-etf       { color: #67e8f9; border-color: rgba(103,232,249,0.35); background: rgba(103,232,249,0.08); }
+  .type-pill.type-crypto    { color: #fbbf24; border-color: rgba(251,191,36,0.35); background: rgba(251,191,36,0.08); }
+  .type-pill.type-bond      { color: #c4b5fd; border-color: rgba(196,181,253,0.35); background: rgba(196,181,253,0.08); }
+  .type-pill.type-cash      { color: #6ef5a4; border-color: rgba(110,245,164,0.35); background: rgba(110,245,164,0.08); }
+  .type-pill.type-commodity { color: #fbcfe8; border-color: rgba(251,207,232,0.35); background: rgba(251,207,232,0.08); }
   .tx-head-row .r { text-align: right; }
   .tx-head-row .c { text-align: center; }
   .tx-row .label-m { display: none; font-size: 11px; color: var(--text-faint); margin-bottom: 2px; }

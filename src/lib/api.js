@@ -68,7 +68,7 @@ export async function fetchAssetCatalog() {
   }
   const { data, error } = await supabase
     .from('assets')
-    .select('ticker, name, type, sector, logo_bg, logo_text, logo_dark, is_cash')
+    .select('ticker, name, type, sector, logo_bg, logo_text, logo_dark, is_cash, settlement_currency')
     .order('ticker');
   if (error) throw error;
   return data ?? [];
@@ -184,15 +184,100 @@ export async function fetchPriceMap() {
 // (source, ticker) running qty and weighted-average cost basis, mirroring
 // the SQL `apply_holdings_delta` so the Overview matches the Transactions list.
 // ----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
+// Cash balance for a (brokerage, currency) pair, derived from in-memory
+// transactions. Mirrors the SQL trajectory math so the modal hint matches
+// what the RPC enforces.
+//
+//   Deposit/Withdraw of <currency>      → ±shares
+//   Buy of an asset settling in <currency>      → −(shares·price + fees + taxes)
+//   Sell of an asset settling in <currency>     → +(shares·price − fees − taxes)
+//   Dividend on an asset settling in <currency> → +value_usd
+// ----------------------------------------------------------------------------
+// Fingerprint shared by DB rows and parsed import rows. Used to dedup
+// imports so a re-upload (or overlapping screenshot batch) doesn't create
+// duplicates. Price is intentionally NOT in the key — OCR + FX drift would
+// break otherwise-identical matches. (brokerage, ticker, action, qty, minute).
+export function txFingerprint(t) {
+  const brokerId = BROKER_NAME_TO_ID[t.source] ?? t.source ?? '';
+  const minute = t.date ? new Date(t.date).toISOString().slice(0, 16) : '';
+  const qty = Number(t.shares ?? 0).toFixed(8);
+  return `${brokerId}|${(t.ticker || '').toUpperCase()}|${t.action}|${qty}|${minute}Z`;
+}
+
+export function importedRowFingerprint(r, brokerageId) {
+  const minute = r.executedAt ? new Date(r.executedAt).toISOString().slice(0, 16) : '';
+  const qty = Number(r.qty || 0).toFixed(8);
+  return `${brokerageId}|${(r.ticker || '').toUpperCase()}|${r.action}|${qty}|${minute}Z`;
+}
+
+// Shares held of a specific ticker in a brokerage, derived from in-memory
+// transactions. Mirrors apply_holdings_delta semantics.
+export function computeSharesHeld(transactions, brokerage, ticker) {
+  if (!brokerage || !ticker) return 0;
+  let qty = 0;
+  const tk = ticker.toUpperCase();
+  for (const t of transactions || []) {
+    if (t.source !== brokerage) continue;
+    if ((t.ticker || '').toUpperCase() !== tk) continue;
+    const s = Number(t.shares) || 0;
+    if (t.action === 'Buy' || t.action === 'Deposit')      qty += s;
+    else if (t.action === 'Sell' || t.action === 'Withdraw') qty -= s;
+  }
+  return qty;
+}
+
+export function computeCashBalance(transactions, brokerage, currency, catalog = []) {
+  const settlementByTicker = Object.fromEntries(
+    (catalog || []).map(a => [a.ticker, a.settlement_currency || (a.is_cash ? a.ticker : 'USD')])
+  );
+  let bal = 0;
+  for (const t of transactions || []) {
+    if (t.source !== brokerage) continue;
+    const isCashFlow = t.action === 'Deposit' || t.action === 'Withdraw';
+    const txCurrency = isCashFlow
+      ? t.ticker
+      : (settlementByTicker[t.ticker] || 'USD');
+    if (txCurrency !== currency) continue;
+
+    const shares = Number(t.shares) || 0;
+    const price  = Number(t.price)  || 0;
+    const fees   = Number(t.fees)   || 0;
+    const taxes  = Number(t.taxes)  || 0;
+    const value  = Number(t.valueUSD) || 0;
+
+    if      (t.action === 'Deposit')  bal += shares;
+    else if (t.action === 'Withdraw') bal -= shares;
+    else if (t.action === 'Buy')      bal -= shares * price + fees + taxes;
+    else if (t.action === 'Sell')     bal += shares * price - fees - taxes;
+    else if (t.action === 'Dividend') bal += value;
+  }
+  return bal;
+}
+
 export function computeAssetsFromTransactions(transactions, catalog, priceMap) {
   const sorted = [...transactions].sort((a, b) => new Date(a.date) - new Date(b.date));
   const positions = new Map(); // key = `${source}|${ticker}` → { qty, cost }
+  const settlementByTicker = Object.fromEntries(
+    (catalog || []).map(a => [a.ticker, a.settlement_currency || (a.is_cash ? a.ticker : 'USD')])
+  );
+
+  const mutateCash = (source, currency, delta) => {
+    const key = `${source}|${currency}`;
+    const cur = positions.get(key) || { qty: 0, cost: 1 };
+    cur.qty += delta;
+    cur.cost = 1;
+    positions.set(key, cur);
+  };
 
   for (const t of sorted) {
     const key = `${t.source}|${t.ticker}`;
     const cur = positions.get(key) || { qty: 0, cost: 0 };
     const shares = Number(t.shares ?? 0);
     const price = Number(t.price ?? 0);
+    const fees = Number(t.fees) || 0;
+    const taxes = Number(t.taxes) || 0;
+    const value = Number(t.valueUSD) || 0;
 
     if (t.action === 'Buy' || t.action === 'Deposit') {
       const newQty = cur.qty + shares;
@@ -205,8 +290,17 @@ export function computeAssetsFromTransactions(transactions, catalog, priceMap) {
       cur.qty = cur.qty - shares;
       if (cur.qty <= 0) { cur.qty = 0; cur.cost = 0; }
     }
-    // Dividend: doesn't change qty or cost basis (cash impact tracked separately)
     positions.set(key, cur);
+
+    // Cash side-effects on Buy/Sell/Dividend (matches SQL apply_cash_delta).
+    if (t.action === 'Buy' || t.action === 'Sell' || t.action === 'Dividend') {
+      const ccy = settlementByTicker[t.ticker] || 'USD';
+      let delta = 0;
+      if      (t.action === 'Buy')      delta = -(shares * price + fees + taxes);
+      else if (t.action === 'Sell')     delta =  (shares * price - fees - taxes);
+      else if (t.action === 'Dividend') delta = value;
+      if (delta !== 0) mutateCash(t.source, ccy, delta);
+    }
   }
 
   const catalogByTicker = Object.fromEntries((catalog ?? []).map(a => [a.ticker, a]));
@@ -243,39 +337,69 @@ export function computeAssetsFromTransactions(transactions, catalog, priceMap) {
 export function computeReturnSeries(transactions, priceMap = {}) {
   if (!transactions || transactions.length === 0) return [];
   const sorted = [...transactions].sort((a, b) => new Date(a.date) - new Date(b.date));
-  const positions = new Map(); // ticker -> { qty, lastPrice }
+  const positions = new Map(); // ticker -> { qty, cost, lastPrice }
   const series = [];
 
-  const valueAt = (useCurrentPrice) => {
-    let v = 0;
+  const snapshot = (useCurrentPrice) => {
+    let value = 0;
+    let invested = 0;
     for (const [tk, p] of positions) {
       if (p.qty <= 0) continue;
       const px = useCurrentPrice
         ? (priceMap[tk] ?? p.lastPrice ?? 0)
         : (p.lastPrice ?? priceMap[tk] ?? 0);
-      v += p.qty * px;
+      value += p.qty * px;
+      invested += p.qty * (p.cost ?? 0);
     }
-    return v;
+    return { value, invested };
+  };
+
+  const mutateCash = (ticker, delta) => {
+    const c = positions.get(ticker) || { qty: 0, cost: 1, lastPrice: 1 };
+    c.qty += delta;
+    c.cost = 1;
+    c.lastPrice = 1;
+    positions.set(ticker, c);
   };
 
   for (const t of sorted) {
-    const cur = positions.get(t.ticker) || { qty: 0, lastPrice: null };
+    const cur = positions.get(t.ticker) || { qty: 0, cost: 0, lastPrice: null };
     const shares = Number(t.shares ?? 0);
-    if (t.action === 'Buy' || t.action === 'Deposit') cur.qty += shares;
-    else if (t.action === 'Sell' || t.action === 'Withdraw') cur.qty -= shares;
-    if (t.price != null) cur.lastPrice = Number(t.price);
-    else if (t.ticker === 'USD') cur.lastPrice = 1;
+    const price = t.price != null ? Number(t.price) : (t.ticker === 'USD' ? 1 : null);
+    const fees = Number(t.fees) || 0;
+    const taxes = Number(t.taxes) || 0;
+    const value = Number(t.valueUSD) || 0;
+    if (t.action === 'Buy' || t.action === 'Deposit') {
+      const newQty = cur.qty + shares;
+      if (newQty > 0 && price != null) {
+        if (cur.qty <= 0 || cur.cost === 0) cur.cost = price;
+        else cur.cost = ((cur.qty * cur.cost) + (shares * price)) / newQty;
+      }
+      cur.qty = newQty;
+    } else if (t.action === 'Sell' || t.action === 'Withdraw') {
+      cur.qty = cur.qty - shares;
+      if (cur.qty <= 0) { cur.qty = 0; cur.cost = 0; }
+    }
+    if (price != null) cur.lastPrice = price;
     positions.set(t.ticker, cur);
-    series.push({ date: new Date(t.date), value: valueAt(false) });
+
+    // Buy/Sell/Dividend mutate the cash bucket (settlement currency). All
+    // current non-cash assets settle in USD; revisit when THB-settled assets exist.
+    if (t.action === 'Buy')      mutateCash('USD', -(shares * price + fees + taxes));
+    else if (t.action === 'Sell')     mutateCash('USD',  (shares * price - fees - taxes));
+    else if (t.action === 'Dividend') mutateCash('USD',  value);
+
+    const snap = snapshot(false);
+    series.push({ date: new Date(t.date), value: snap.value, invested: snap.invested });
   }
 
   const lastDate = series[series.length - 1].date;
   const now = new Date();
-  const nowValue = valueAt(true);
+  const nowSnap = snapshot(true);
   if (now.getTime() - lastDate.getTime() > 60_000) {
-    series.push({ date: now, value: nowValue });
+    series.push({ date: now, value: nowSnap.value, invested: nowSnap.invested });
   } else {
-    series[series.length - 1] = { date: lastDate, value: nowValue };
+    series[series.length - 1] = { date: lastDate, value: nowSnap.value, invested: nowSnap.invested };
   }
   return series;
 }
@@ -361,9 +485,14 @@ export async function fetchPriceHistory(tickers, from, to) {
 export function computeDailyReturnSeries(transactions, priceHistory, from, to) {
   if (!transactions || transactions.length === 0) return [];
   const sorted = [...transactions].sort((a, b) => new Date(a.date) - new Date(b.date));
-  const positions = new Map(); // ticker -> qty
+  const positions = new Map(); // ticker -> { qty, cost }
   const lastTxPrice = new Map(); // ticker -> price from most recent tx
   const series = [];
+
+  // Cumulative invested-capital in baht, locked at each deposit's FX rate.
+  // Lets the chart show real "conversion-risk" return in THB mode: the gap
+  // between value-in-THB-today vs THB-actually-put-in.
+  let investedThb = 0;
 
   const startMs = new Date(toYMD(from) + 'T00:00:00Z').getTime();
   const endMs = new Date(toYMD(to) + 'T00:00:00Z').getTime();
@@ -374,17 +503,62 @@ export function computeDailyReturnSeries(transactions, priceHistory, from, to) {
     while (txi < sorted.length && new Date(sorted[txi].date).getTime() <= dayEnd) {
       const t = sorted[txi];
       const shares = Number(t.shares ?? 0);
-      const cur = positions.get(t.ticker) || 0;
-      if (t.action === 'Buy' || t.action === 'Deposit') positions.set(t.ticker, cur + shares);
-      else if (t.action === 'Sell' || t.action === 'Withdraw') positions.set(t.ticker, cur - shares);
-      if (t.price != null) lastTxPrice.set(t.ticker, Number(t.price));
-      else if (t.ticker === 'USD') lastTxPrice.set('USD', 1);
+      const price = t.price != null ? Number(t.price) : (t.ticker === 'USD' ? 1 : null);
+      const fees = Number(t.fees) || 0;
+      const taxes = Number(t.taxes) || 0;
+      const value = Number(t.valueUSD) || 0;
+      const cur = positions.get(t.ticker) || { qty: 0, cost: 0 };
+      if (t.action === 'Buy' || t.action === 'Deposit') {
+        const newQty = cur.qty + shares;
+        if (newQty > 0 && price != null) {
+          if (cur.qty <= 0 || cur.cost === 0) cur.cost = price;
+          else cur.cost = ((cur.qty * cur.cost) + (shares * price)) / newQty;
+        }
+        cur.qty = newQty;
+      } else if (t.action === 'Sell' || t.action === 'Withdraw') {
+        cur.qty = cur.qty - shares;
+        if (cur.qty <= 0) { cur.qty = 0; cur.cost = 0; }
+      }
+      if (price != null) lastTxPrice.set(t.ticker, price);
+      positions.set(t.ticker, cur);
+
+      // Cash side-effects on Buy/Sell/Dividend (USD settlement for all current assets).
+      const mutateUsd = (delta) => {
+        const c = positions.get('USD') || { qty: 0, cost: 1 };
+        c.qty += delta;
+        c.cost = 1;
+        positions.set('USD', c);
+        lastTxPrice.set('USD', 1);
+      };
+      if (t.action === 'Buy')      mutateUsd(-(shares * price + fees + taxes));
+      else if (t.action === 'Sell')     mutateUsd( (shares * price - fees - taxes));
+      else if (t.action === 'Dividend') mutateUsd( value);
+
+      // Track cumulative THB-denominated invested capital. THB deposits add
+      // baht directly; USD deposits convert at deposit-day FX so the line
+      // captures the rate the user actually exchanged at. Withdraws subtract.
+      if (t.action === 'Deposit' || t.action === 'Withdraw') {
+        const sign = t.action === 'Deposit' ? 1 : -1;
+        if (t.ticker === 'THB') {
+          investedThb += sign * shares;
+        } else if (t.ticker === 'USD') {
+          let fx = Number(t.fx_rate_at_tx) || 0;
+          if (!fx) {
+            const ymd = new Date(t.date).toISOString().slice(0, 10);
+            const usdPerThb = priceHistory.get('THB')?.get(ymd);
+            if (usdPerThb && usdPerThb > 0) fx = 1 / usdPerThb;
+          }
+          if (fx > 0) investedThb += sign * shares * fx;
+        }
+      }
+
       txi++;
     }
 
     const dayStr = new Date(dayMs).toISOString().slice(0, 10);
     let value = 0;
-    for (const [ticker, qty] of positions) {
+    let invested = 0;
+    for (const [ticker, { qty, cost }] of positions) {
       if (qty <= 0) continue;
       let price;
       if (ticker === 'USD') {
@@ -400,8 +574,24 @@ export function computeDailyReturnSeries(transactions, priceHistory, from, to) {
         if (price == null) price = lastTxPrice.get(ticker) ?? 0;
       }
       value += qty * price;
+      invested += qty * cost;
     }
-    series.push({ date: new Date(dayMs), value });
+
+    // Attach the day's USD-per-THB FX so the chart can render historical
+    // values in THB at the rate they were actually worth on that day. Walks
+    // back up to 7 days if the exact day is missing (weekends / gaps).
+    const thbHist = priceHistory.get('THB');
+    let fxRate = thbHist?.get(dayStr);
+    if (fxRate == null && thbHist) {
+      for (let back = 1; back <= 7 && fxRate == null; back++) {
+        fxRate = thbHist.get(new Date(dayMs - back * MS_PER_DAY).toISOString().slice(0, 10));
+      }
+    }
+    // priceHistory stores THB as USD-per-THB, but the FX_RATE elsewhere is
+    // THB-per-USD. Invert to match: fxRate = THB per 1 USD.
+    fxRate = (fxRate != null && fxRate > 0) ? 1 / fxRate : null;
+
+    series.push({ date: new Date(dayMs), value, invested, investedThb, fxRate });
   }
   return series;
 }
@@ -429,6 +619,235 @@ export async function fetchHistoricalPrice(ticker, date) {
   });
   if (error) { console.warn('[historical-price] failed', error); return null; }
   return typeof data?.price === 'number' ? data.price : null;
+}
+
+// ----------------------------------------------------------------------------
+// Parse a Webull monthly-statement CSV into the same row shape the image
+// importer produces. Runs entirely client-side — no edge function, no quota.
+//
+// Expected sections (only TRADE RECORDS / Stocks is extracted today):
+//   "Monthly Statement YYYY-MM"
+//   "TRADE RECORDS "
+//   "Stocks"
+//   "Currency: USD"
+//   Symbol & Name,Trade Date,Settlement Date,Buy/Sell,Quantity,Traded Price,
+//     Gross Amount,Comm/Fee/Tax,VAT,Net Amount
+//   <data rows…>
+//   "Options"   <-- everything below is ignored
+//
+// Trade row example:
+//   META META PLATFORMS INC,31/10/2025,03/11/2025,BUY,0.26925,657.36,176.99,-0.18,-0.01,177.18
+//
+// Notes:
+// - Ticker is the FIRST whitespace-delimited token of "Symbol & Name".
+// - Dates are DD/MM/YYYY. We don't have a clock time so we stamp 05:00 UTC
+//   (≈ noon Bangkok) — the user can fine-tune in the preview.
+// - Comm/Fee/Tax and VAT are signed negative in the export; we store the
+//   absolute value as positive `fees` / `taxes` to match our DB convention.
+// ----------------------------------------------------------------------------
+function splitCsvLine(line) {
+  const out = [];
+  let cur = '';
+  let inQuote = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (c === '"') {
+      if (inQuote && line[i + 1] === '"') { cur += '"'; i++; }
+      else inQuote = !inQuote;
+    } else if (c === ',' && !inQuote) {
+      out.push(cur);
+      cur = '';
+    } else {
+      cur += c;
+    }
+  }
+  out.push(cur);
+  return out;
+}
+
+export function parseWebullCSV(text) {
+  const lines = (text || '').split(/\r?\n/);
+  const rows = [];
+  let skipped = 0;
+  let inTradeRecords = false;
+  let inStocks = false;
+  let currency = 'USD';
+  let headerSeen = false;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    if (/TRADE RECORDS/i.test(trimmed)) { inTradeRecords = true; inStocks = false; headerSeen = false; continue; }
+    if (/^PORTFOLIO/i.test(trimmed) || /^Portfolio Advisory/i.test(trimmed)) { inTradeRecords = false; inStocks = false; continue; }
+
+    if (inTradeRecords) {
+      if (/^Stocks\b/i.test(trimmed))  { inStocks = true;  headerSeen = false; continue; }
+      if (/^Options\b/i.test(trimmed)) { inStocks = false; headerSeen = false; continue; }
+    }
+    if (!inStocks) continue;
+
+    const cells = splitCsvLine(line);
+    const first = (cells[0] || '').trim();
+
+    if (first.startsWith('Currency:')) {
+      currency = first.split(':')[1]?.trim() || 'USD';
+      continue;
+    }
+    if (first === 'Symbol & Name') { headerSeen = true; continue; }
+    if (!headerSeen) continue;
+
+    // Webull pads its sections with `"",,,,` rows — skip them silently so
+    // the user's "skipped" counter only reflects rows we actually tried to
+    // parse.
+    if (cells.every(c => c.trim() === '')) continue;
+
+    const sym = first;
+    const tradeDate = (cells[1] || '').trim();
+    const buyOrSell = (cells[3] || '').trim().toUpperCase();
+    const qty = parseFloat(cells[4]);
+    const price = parseFloat(cells[5]);
+    const fee = Math.abs(parseFloat(cells[7]) || 0);
+    const vat = Math.abs(parseFloat(cells[8]) || 0);
+
+    const ticker = sym.split(/\s+/)[0]?.toUpperCase();
+    const action = buyOrSell === 'BUY' ? 'Buy' : buyOrSell === 'SELL' ? 'Sell' : null;
+    const dm = tradeDate.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+
+    if (!ticker || !action || !isFinite(qty) || qty <= 0 || !isFinite(price) || !dm) {
+      skipped++;
+      continue;
+    }
+    const [, dd, mm, yyyy] = dm;
+    const executedAt = `${yyyy}-${mm}-${dd}T05:00:00Z`; // ~noon Bangkok
+
+    rows.push({
+      action,
+      ticker,
+      qty,
+      executedPrice: price,
+      currency: currency === 'THB' ? 'THB' : 'USD',
+      executedAt,
+      fees: fee,
+      taxes: vat,
+    });
+  }
+  return { rows, skipped };
+}
+
+// ----------------------------------------------------------------------------
+// Parse a transaction-history screenshot via the parse-transactions-image
+// edge function. `file` is a Blob/File from an <input type=file>.
+// Returns { rows, skipped } where rows is an array of:
+//   { action: 'Buy'|'Sell', ticker, qty, executedPrice, currency: 'USD'|'THB', executedAt }
+// ----------------------------------------------------------------------------
+// Resize an image File/Blob so its long edge is at most `maxEdge` pixels and
+// re-encode to JPEG. Used to keep the parse-transactions-image edge function
+// body under Supabase's request size limit.
+async function downscaleImageBlob(file, maxEdge = 1600, quality = 0.85) {
+  if (typeof window === 'undefined' || !window.createImageBitmap) {
+    return { blob: file, mimeType: file.type || 'image/jpeg' };
+  }
+  try {
+    const bitmap = await createImageBitmap(file);
+    const { width, height } = bitmap;
+    const scale = Math.min(1, maxEdge / Math.max(width, height));
+    const w = Math.round(width * scale);
+    const h = Math.round(height * scale);
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(bitmap, 0, 0, w, h);
+    bitmap.close?.();
+    const blob = await new Promise((resolve) =>
+      canvas.toBlob(resolve, 'image/jpeg', quality)
+    );
+    if (!blob) return { blob: file, mimeType: file.type || 'image/jpeg' };
+    return { blob, mimeType: 'image/jpeg' };
+  } catch {
+    return { blob: file, mimeType: file.type || 'image/jpeg' };
+  }
+}
+
+export async function parseTransactionsImage(file, brokerage = '', bucket = 'security') {
+  if (!supabaseEnabled) throw new Error('Supabase not configured');
+  if (!file) throw new Error('no file');
+
+  // Downscale before sending so we don't blow Supabase's edge-function body
+  // limit on full-resolution phone screenshots. Long edge capped at 1600px,
+  // re-encoded to JPEG at quality 0.85. Text stays plenty readable for OCR.
+  const { blob, mimeType: outMime } = await downscaleImageBlob(file, 1600, 0.85);
+
+  // Send as multipart/form-data via supabase-js. The SDK forwards FormData
+  // bodies as multipart/form-data (no JSON serialization, no base64 inflation)
+  // while keeping its known-good auth + CORS handling.
+  const form = new FormData();
+  form.append('image', blob, file.name || 'image.jpg');
+  form.append('mimeType', outMime);
+  form.append('bucket', bucket);
+  if (brokerage) form.append('brokerage', brokerage);
+
+  // Up to 3 attempts when Gemini throttles us. The edge function always
+  // returns HTTP 200; errors live in body.error. On rate_limited we sleep
+  // client-side using the retryAfterMs hint from Gemini's RetryInfo.
+  const MAX_ATTEMPTS = 3;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const { data, error } = await supabase.functions.invoke('parse-transactions-image', {
+      body: form,
+    });
+    if (error) {
+      // The function always returns 200, so any error here is genuine network
+      // / CORS / supabase-js failure.
+      throw new Error(error.message || String(error));
+    }
+    if (data?.error === 'rate_limited' && attempt < MAX_ATTEMPTS) {
+      // Cap at 60s — beyond that the user might as well retry manually.
+      const wait = Math.min(60000, Number(data.retryAfterMs) || 10000);
+      await new Promise(r => setTimeout(r, wait));
+      continue;
+    }
+    if (data?.error) throw new Error(data.error);
+    return { rows: data?.rows || [], skipped: data?.skipped || 0 };
+  }
+  throw new Error('parse-transactions-image: exhausted retries');
+}
+
+// ----------------------------------------------------------------------------
+// One-shot: rewrite fx_rate_at_tx on every THB-denominated tx (or any tx with
+// a null FX rate) using the historical THB price on that tx's executed_at.
+// Returns { updated, missing, total }.
+// ----------------------------------------------------------------------------
+export async function backfillHistoricalFx() {
+  if (!supabaseEnabled) return { updated: 0, missing: 0, total: 0 };
+  const { data, error } = await supabase
+    .from('transactions')
+    .select('id, executed_at, ticker, action, fx_rate_at_tx');
+  if (error) throw error;
+  const rows = data || [];
+  let updated = 0, missing = 0;
+  // Cache historical rate per date so we hit the edge function once per date,
+  // not once per row.
+  const cache = new Map();
+  for (const t of rows) {
+    const dateStr = new Date(t.executed_at).toISOString().slice(0, 10);
+    let fx = cache.get(dateStr);
+    if (fx === undefined) {
+      const p = await fetchHistoricalPrice('THB', dateStr);
+      fx = (p == null || p <= 0) ? null : Number((1 / p).toFixed(4));
+      cache.set(dateStr, fx);
+    }
+    if (fx == null) { missing++; continue; }
+    // Skip the UPDATE if the stored rate already matches (saves a write).
+    if (Math.abs(Number(t.fx_rate_at_tx ?? 0) - fx) < 0.00005) { updated++; continue; }
+    const { error: upErr } = await supabase
+      .from('transactions')
+      .update({ fx_rate_at_tx: fx })
+      .eq('id', t.id);
+    if (upErr) { console.warn('[backfillFx] update failed', t.id, upErr.message); missing++; continue; }
+    updated++;
+  }
+  return { updated, missing, total: rows.length };
 }
 
 // ----------------------------------------------------------------------------

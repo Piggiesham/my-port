@@ -17,6 +17,11 @@ export const SOURCES = {
   'Binance': { color: '#f0b90b', dot: '#b8860b' },
 };
 export const PORTFOLIOS = ['All', 'Dime!', 'Webull', 'Binance'];
+export const PORTFOLIO_TYPES = {
+  'Dime!':   ['Security', 'Bond', 'Cash'],
+  'Webull':  ['Security', 'Bond', 'Cash'],
+  'Binance': ['Crypto', 'Cash'],
+};
 
 const ASSETS_RAW = [
   { ticker: 'VOO',  name: 'Vanguard S&P 500', type: 'ETF',       source: 'Dime!',   logo: { bg: '#9c1b1b', text: 'V' },  price: 528.42,  qty: 1.811,  cost: 448.85,  holdingUSD: 956.71,  pctProfit: 17.86, plUSD: 144.95 },
@@ -180,6 +185,49 @@ export function fmtCurrency(usd, currency, opts = {}) {
 
 export const fmtCurrencySym = (currency) => (currency === 'THB' ? '฿' : '$');
 export const fmtCurrencyCode = (currency) => (currency === 'THB' ? 'THB' : 'USD');
+
+// ----------------------------------------------------------------------------
+// Bangkok-local time helpers. Every user-visible date/time goes through these
+// so the UI doesn't shift around when the user is travelling between time
+// zones. Storage stays UTC; only display + form defaults are Bangkok-local.
+// ----------------------------------------------------------------------------
+export const BKK_TZ = 'Asia/Bangkok';
+export const fmtDateBkk = (d, opts = { day: '2-digit', month: 'short', year: 'numeric' }) =>
+  new Date(d).toLocaleDateString('en-US', { ...opts, timeZone: BKK_TZ });
+export const fmtTimeBkk = (d, opts = { hour: '2-digit', minute: '2-digit', hour12: true }) =>
+  new Date(d).toLocaleTimeString('en-US', { ...opts, timeZone: BKK_TZ });
+export const fmtDateTimeBkk = (d) =>
+  new Date(d).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short', timeZone: BKK_TZ });
+// `now` in Bangkok, split into form-friendly parts.
+export function bkkNowParts() {
+  const now = new Date();
+  const bkk = new Date(now.getTime() + 7 * 3600_000);
+  const pad = (n) => String(n).padStart(2, '0');
+  return {
+    date: `${bkk.getUTCFullYear()}-${pad(bkk.getUTCMonth() + 1)}-${pad(bkk.getUTCDate())}`,
+    time: `${pad(bkk.getUTCHours())}:${pad(bkk.getUTCMinutes())}`,
+  };
+}
+// UTC ISO → Bangkok date+time inputs (e.g. for the Edit form).
+export function utcIsoToBkkParts(iso) {
+  if (!iso) return { date: '', time: '' };
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return { date: '', time: '' };
+  const b = new Date(d.getTime() + 7 * 3600_000);
+  const pad = (n) => String(n).padStart(2, '0');
+  return {
+    date: `${b.getUTCFullYear()}-${pad(b.getUTCMonth() + 1)}-${pad(b.getUTCDate())}`,
+    time: `${pad(b.getUTCHours())}:${pad(b.getUTCMinutes())}`,
+  };
+}
+// Bangkok wall-clock date+time → UTC ISO (for saving to Postgres).
+export function bkkPartsToUtcIso(date, time = '00:00') {
+  if (!date) return '';
+  const [y, m, d] = date.split('-').map(Number);
+  const [hh, mm] = (time || '00:00').split(':').map(Number);
+  const asIfUtc = Date.UTC(y, (m || 1) - 1, d || 1, hh || 0, mm || 0, 0);
+  return new Date(asIfUtc - 7 * 3600_000).toISOString();
+}
 
 // Shared Currency context
 import { createContext } from 'react';

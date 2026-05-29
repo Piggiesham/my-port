@@ -380,6 +380,12 @@ deno_version = 2
 # [edge_runtime.secrets]
 # secret_key = "env(SECRET_VALUE)"
 
+# Edge functions: disable JWT verification on the image-parse function so the
+# CORS preflight OPTIONS request isn't rejected by the gateway. Auth still
+# works via the anon key forwarded by supabase-js for the actual POST.
+[functions.parse-transactions-image]
+verify_jwt = false
+
 [analytics]
 enabled = true
 port = 54327
