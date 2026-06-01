@@ -206,21 +206,38 @@ export async function fetchPriceMap() {
 //   Sell of an asset settling in <currency>     → +(shares·price − fees − taxes)
 //   Dividend on an asset settling in <currency> → +value_usd
 // ----------------------------------------------------------------------------
-// Fingerprint shared by DB rows and parsed import rows. Used to dedup
-// imports so a re-upload (or overlapping screenshot batch) doesn't create
-// duplicates. Price is intentionally NOT in the key — OCR + FX drift would
-// break otherwise-identical matches. (brokerage, ticker, action, qty, minute).
+// Fingerprint shared by DB rows and parsed import rows. Used to dedup imports
+// so a re-upload (or overlapping screenshot batch) doesn't create duplicates.
+// Key: brokerage | ticker | action | amount | minute | label.
+//   - amount is the share count for trades, but the USD value for cash rows
+//     (Dividend/Fee/Tax have no qty).
+//   - label disambiguates same-minute cash rows that are otherwise identical —
+//     notably a TAF Fee and a SEC Fee posted at the same instant (both −$0.01,
+//     both ticker USD). Without it the second would look like a duplicate.
+// Price is intentionally NOT in the key — OCR + FX drift would break matches.
+const CASH_ACTIONS = new Set(['Dividend', 'Fee', 'Tax']);
+
+function fingerprintKey(brokerId, ticker, action, amount, minute, label) {
+  return `${brokerId}|${(ticker || '').toUpperCase()}|${action}|${amount}|${minute}Z|${label || ''}`;
+}
+
 export function txFingerprint(t) {
   const brokerId = BROKER_NAME_TO_ID[t.source] ?? t.source ?? '';
   const minute = t.date ? new Date(t.date).toISOString().slice(0, 16) : '';
-  const qty = Number(t.shares ?? 0).toFixed(8);
-  return `${brokerId}|${(t.ticker || '').toUpperCase()}|${t.action}|${qty}|${minute}Z`;
+  const isCash = CASH_ACTIONS.has(t.action);
+  const amount = isCash ? Number(t.valueUSD ?? 0).toFixed(2) : Number(t.shares ?? 0).toFixed(8);
+  // Only fees need the label (TAF vs SEC collide on USD/0.01/minute); dividends
+  // and taxes are already unique by action+ticker+value.
+  const label = t.action === 'Fee' ? (t.description || '') : '';
+  return fingerprintKey(brokerId, t.ticker, t.action, amount, minute, label);
 }
 
 export function importedRowFingerprint(r, brokerageId) {
   const minute = r.executedAt ? new Date(r.executedAt).toISOString().slice(0, 16) : '';
-  const qty = Number(r.qty || 0).toFixed(8);
-  return `${brokerageId}|${(r.ticker || '').toUpperCase()}|${r.action}|${qty}|${minute}Z`;
+  const isCash = CASH_ACTIONS.has(r.action);
+  const amount = isCash ? Number(r.value ?? 0).toFixed(2) : Number(r.qty ?? 0).toFixed(8);
+  const label = r.action === 'Fee' ? (r.label || '') : '';
+  return fingerprintKey(brokerageId, r.ticker, r.action, amount, minute, label);
 }
 
 // Shares held of a specific ticker in a brokerage, derived from in-memory
@@ -263,6 +280,8 @@ export function computeCashBalance(transactions, brokerage, currency, catalog = 
     else if (t.action === 'Buy')      bal -= shares * price + fees + taxes;
     else if (t.action === 'Sell')     bal += shares * price - fees - taxes;
     else if (t.action === 'Dividend') bal += value;
+    else if (t.action === 'Fee')      bal -= value;
+    else if (t.action === 'Tax')      bal -= value;
   }
   return bal;
 }
@@ -304,13 +323,16 @@ export function computeAssetsFromTransactions(transactions, catalog, priceMap) {
     }
     positions.set(key, cur);
 
-    // Cash side-effects on Buy/Sell/Dividend (matches SQL apply_cash_delta).
-    if (t.action === 'Buy' || t.action === 'Sell' || t.action === 'Dividend') {
+    // Cash side-effects on Buy/Sell/Dividend/Fee/Tax (matches SQL apply_cash_delta).
+    if (t.action === 'Buy' || t.action === 'Sell' || t.action === 'Dividend'
+        || t.action === 'Fee' || t.action === 'Tax') {
       const ccy = settlementByTicker[t.ticker] || 'USD';
       let delta = 0;
       if      (t.action === 'Buy')      delta = -(shares * price + fees + taxes);
       else if (t.action === 'Sell')     delta =  (shares * price - fees - taxes);
       else if (t.action === 'Dividend') delta = value;
+      else if (t.action === 'Fee')      delta = -value;
+      else if (t.action === 'Tax')      delta = -value;
       if (delta !== 0) mutateCash(t.source, ccy, delta);
     }
   }
@@ -400,6 +422,8 @@ export function computeReturnSeries(transactions, priceMap = {}) {
     if (t.action === 'Buy')      mutateCash('USD', -(shares * price + fees + taxes));
     else if (t.action === 'Sell')     mutateCash('USD',  (shares * price - fees - taxes));
     else if (t.action === 'Dividend') mutateCash('USD',  value);
+    else if (t.action === 'Fee')      mutateCash('USD', -value);
+    else if (t.action === 'Tax')      mutateCash('USD', -value);
 
     const snap = snapshot(false);
     series.push({ date: new Date(t.date), value: snap.value, invested: snap.invested });
@@ -545,6 +569,8 @@ export function computeDailyReturnSeries(transactions, priceHistory, from, to) {
       if (t.action === 'Buy')      mutateUsd(-(shares * price + fees + taxes));
       else if (t.action === 'Sell')     mutateUsd( (shares * price - fees - taxes));
       else if (t.action === 'Dividend') mutateUsd( value);
+      else if (t.action === 'Fee')      mutateUsd(-value);
+      else if (t.action === 'Tax')      mutateUsd(-value);
 
       // Track cumulative THB-denominated invested capital. THB deposits add
       // baht directly; USD deposits convert at deposit-day FX so the line

@@ -20,6 +20,9 @@ const BROKER_SOURCE = {
   'Binance': null,   // not supported yet
 };
 
+// Cash-only imported row types — they carry a USD `value` instead of qty/price.
+const CASH_ROW = new Set(['Dividend', 'Fee', 'Tax']);
+
 export default function ImportModal({ onClose, onDone, transactions = [] }) {
   const [step, setStep] = useState('brokerage'); // brokerage → bucket → upload → preview
   const [portfolio, setPortfolio] = useState(null);
@@ -229,10 +232,17 @@ export default function ImportModal({ onClose, onDone, transactions = [] }) {
       else if (t.action === 'Buy')      { cash = -(shares * price + fees + taxes); sh = shares; }
       else if (t.action === 'Sell')     { cash = (shares * price - fees - taxes); sh = -shares; }
       else if (t.action === 'Dividend') cash = value;
+      else if (t.action === 'Fee')      cash = -value;
+      else if (t.action === 'Tax')      cash = -value;
       events.push({ ms: new Date(t.date).getTime(), order: 0, ticker: tk, cash, sh });
     }
     for (const r of sel) {                              // new rows → order 1
       const tk = (r.ticker || '').toUpperCase();
+      if (CASH_ROW.has(r.action)) {
+        const v = Number(r.value) || 0;
+        events.push({ ms: new Date(r.executedAt).getTime(), order: 1, ticker: tk, cash: r.action === 'Dividend' ? v : -v });
+        continue;
+      }
       const qty = Number(r.qty) || 0;
       const { buy, sell } = rowCostUsd(r);
       if (r.action === 'Buy')       events.push({ ms: new Date(r.executedAt).getTime(), order: 1, ticker: tk, newBuy: true, rowId: r._id, iso: r.executedAt, cost: buy, sh: qty });
@@ -299,6 +309,16 @@ export default function ImportModal({ onClose, onDone, transactions = [] }) {
       });
     }
     for (const r of tradeRows) {
+      if (CASH_ROW.has(r.action)) {
+        // Dividend / Fee / Tax — USD cash rows. value_usd carries the amount;
+        // the broker label goes in description so re-imports dedup correctly.
+        entries.push({
+          sortIso: r.executedAt,
+          meta: { kind: 'trade', rowId: r._id },
+          item: { portfolio, ticker: (r.ticker || 'USD').toUpperCase(), action: r.action, valueUsd: Number(r.value) || 0, description: r.label || r.action, executedAt: r.executedAt },
+        });
+        continue;
+      }
       const fx = await fxForDate(r.executedAt);
       const priceUsd = r.currency === 'THB' ? (Number(r.executedPrice) || 0) / fx : (Number(r.executedPrice) || 0);
       const qty = Number(r.qty) || 0;
@@ -467,7 +487,7 @@ export default function ImportModal({ onClose, onDone, transactions = [] }) {
         <p style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 12 }}>
           {isCsv
             ? 'Only Buy/Sell stock rows under TRADE RECORDS are extracted. Options, portfolio summary, and dividends are skipped. Overlapping rows across CSVs are deduplicated automatically.'
-            : 'Only Buy/Sell rows will be extracted. Fees, dividends, and dividend tax are skipped. Overlapping rows across images are deduplicated automatically.'}
+            : 'Buys, sells, dividends, withholding tax, and TAF/SEC fees are extracted. Cancelled and Expired orders are skipped. Overlapping rows across images are deduplicated automatically.'}
         </p>
       </div>
     );
@@ -490,22 +510,24 @@ export default function ImportModal({ onClose, onDone, transactions = [] }) {
         const fresh = rows.length - dupes;
         return (
           <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 10 }}>
-            Parsed <strong>{rows.length}</strong> Buy/Sell row{rows.length === 1 ? '' : 's'}
+            Parsed <strong>{rows.length}</strong> row{rows.length === 1 ? '' : 's'}
             {' '}({fresh} new{dupes > 0 && <>, {dupes} duplicate{dupes === 1 ? '' : 's'}</>})
-            {skipped > 0 && <> · Skipped {skipped} non-trade row{skipped === 1 ? '' : 's'}</>}
+            {skipped > 0 && <> · Skipped {skipped} other row{skipped === 1 ? '' : 's'}</>}
           </div>
         );
       })()}
       {rows.length === 0 ? (
         <div style={{ padding: 16, textAlign: 'center', color: 'var(--text-faint)', fontSize: 13 }}>
-          No Buy/Sell rows found in the image.
+          No transactions found in the image.
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 360, overflow: 'auto' }}>
           {sortedRows.map(r => {
             const expanded = r._id === expandedRowId;
-            const actionColor = r.action === 'Buy' ? 'var(--green)' : 'var(--red)';
+            const isCash = CASH_ROW.has(r.action);
+            const actionColor = (r.action === 'Buy' || r.action === 'Dividend') ? 'var(--green)' : 'var(--red)';
             const priceStr = (Number(r.executedPrice) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 6 });
+            const valueStr = (Number(r.value) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
             const dg = r._status === 'fail' ? diagnose(r._error) : null;
             const borderColor = r._status === 'fail' ? 'rgba(248,113,113,0.5)'
               : r._status === 'ok' ? 'rgba(74,222,128,0.4)'
@@ -539,7 +561,9 @@ export default function ImportModal({ onClose, onDone, transactions = [] }) {
                     {fmtDateBkk(r.executedAt)}
                   </span>
                   <span style={{ fontSize: 12, color: 'var(--text)', fontFamily: 'JetBrains Mono, monospace', textAlign: 'right' }}>
-                    {fmtCurrencySym(r.currency)}{priceStr} {r.currency}
+                    {isCash
+                      ? `${r.action === 'Dividend' ? '+' : '−'}$${valueStr} USD`
+                      : `${fmtCurrencySym(r.currency)}${priceStr} ${r.currency}`}
                   </span>
                   <span style={{ minWidth: 80, textAlign: 'right' }}>
                     {r._status === 'ok' && (
@@ -586,14 +610,20 @@ export default function ImportModal({ onClose, onDone, transactions = [] }) {
                 {expanded && (
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, padding: '10px 12px 12px', borderTop: '1px solid var(--border)' }}>
                     <input className="field-input" value={r.ticker} onChange={e => patchRow(r._id, { ticker: e.target.value.toUpperCase() })} placeholder="Ticker" style={{ fontSize: 12 }} />
-                    <input className="field-input" value={r.qty} onChange={e => patchRow(r._id, { qty: parseFloat(e.target.value) || 0 })} placeholder="Qty" inputMode="decimal" style={{ fontSize: 12 }} />
-                    <input className="field-input" value={r.executedPrice} onChange={e => patchRow(r._id, { executedPrice: parseFloat(e.target.value) || 0 })} placeholder="Price" inputMode="decimal" style={{ fontSize: 12 }} />
-                    <div className="field-with-suffix" title="Currency of the Executed Price column.">
-                      <select className="field-input" value={r.currency} onChange={e => patchRow(r._id, { currency: e.target.value })} style={{ fontSize: 12 }}>
-                        <option value="USD">Price in USD</option>
-                        <option value="THB">Price in THB</option>
-                      </select>
-                    </div>
+                    {isCash ? (
+                      <input className="field-input" value={r.value ?? ''} onChange={e => patchRow(r._id, { value: parseFloat(e.target.value) || 0 })} placeholder="Amount (USD)" inputMode="decimal" style={{ fontSize: 12 }} />
+                    ) : (
+                      <>
+                        <input className="field-input" value={r.qty} onChange={e => patchRow(r._id, { qty: parseFloat(e.target.value) || 0 })} placeholder="Qty" inputMode="decimal" style={{ fontSize: 12 }} />
+                        <input className="field-input" value={r.executedPrice} onChange={e => patchRow(r._id, { executedPrice: parseFloat(e.target.value) || 0 })} placeholder="Price" inputMode="decimal" style={{ fontSize: 12 }} />
+                        <div className="field-with-suffix" title="Currency of the Executed Price column.">
+                          <select className="field-input" value={r.currency} onChange={e => patchRow(r._id, { currency: e.target.value })} style={{ fontSize: 12 }}>
+                            <option value="USD">Price in USD</option>
+                            <option value="THB">Price in THB</option>
+                          </select>
+                        </div>
+                      </>
+                    )}
                     {(() => {
                       const parts = utcIsoToBkkParts(r.executedAt);
                       return (

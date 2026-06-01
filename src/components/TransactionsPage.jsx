@@ -116,7 +116,7 @@ export default function TransactionsPage({ transactions = MOCK_TRANSACTIONS, ass
 
   // Bank-statement convention: money in = +green, money out = −red.
   const CASH_IN  = new Set(['Sell', 'Dividend', 'Deposit']);
-  const CASH_OUT = new Set(['Buy', 'Withdraw']);
+  const CASH_OUT = new Set(['Buy', 'Withdraw', 'Fee', 'Tax']);
   const valueClass = (action) => CASH_IN.has(action) ? 'up' : CASH_OUT.has(action) ? 'down' : '';
   const valueSign  = (action) => CASH_IN.has(action) ? '+' : CASH_OUT.has(action) ? '-' : '';
 

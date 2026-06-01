@@ -18,8 +18,10 @@
 // Or legacy JSON:
 //   { imageBase64: string, mimeType: string, bucket: 'security' | ... }
 //
-// Response: { rows: Array<{ action, ticker, qty, executedPrice, currency, executedAt }>, skipped: number }
+// Response: { rows: Array<TradeRow | CashRow>, skipped: number }
 //          | { error: string, retryAfterMs?: number }
+//   TradeRow: { action:'Buy'|'Sell', ticker, qty, executedPrice, currency, executedAt }
+//   CashRow:  { action:'Dividend'|'Fee'|'Tax', ticker, value, currency:'USD', executedAt, label }
 //
 // Always returns HTTP 200 — error info goes in body.error so supabase-js's
 // non-2xx wrapper doesn't swallow the real message.
@@ -44,25 +46,44 @@ function json(body: unknown) {
 
 const PROMPT_DIME = `You are extracting transactions from a screenshot of the Dime! brokerage Activity screen.
 
-ONLY extract rows whose action is "Buy" or "Sell". Skip "Cancelled" rows entirely. Skip every other row type — fees, dividends, deposits, withdrawals, transfers. Skip month-header rows like "February 2025".
+Extract these row types: Buy, Sell, Dividend, Dividend Withholding Tax, and broker fees (TAF Fee, SEC Fee). SKIP any row labelled "Cancelled" or "Expired" — those never executed. Skip month-header rows like "February 2025".
 
-For each Buy/Sell row, return one object:
+Classify each row by its left-hand label:
+- "Buy <TICKER>"  → action "Buy"
+- "Sell <TICKER>" → action "Sell"
+- "Dividend <TICKER>"  (but NOT "Dividend Withholding Tax") → action "Dividend"
+- "Dividend Withholding Tax <TICKER>" → action "Tax"
+- "TAF Fee" / "SEC Fee" → action "Fee"
+
+For Buy/Sell rows, return:
 {
   "action": "Buy" | "Sell",
   "ticker": "<symbol next to Buy/Sell, uppercase>",
   "qty": <number from the "Shares" line>,
-  "executedPrice": <number from "Executed Price" — this is USD per share, ALWAYS>,
+  "executedPrice": <number from "Executed Price" — USD per share, ALWAYS>,
   "currency": "USD",
-  "executedAt": "<ISO 8601 UTC>"
+  "executedAt": "<ISO 8601 with Z>"
 }
 
+For Dividend / Tax / Fee rows, return:
+{
+  "action": "Dividend" | "Tax" | "Fee",
+  "ticker": "<see ticker rule>",
+  "value": <the USD amount shown, as a POSITIVE number, ignoring any +/- sign>,
+  "currency": "USD",
+  "executedAt": "<ISO 8601 with Z>",
+  "label": "<the exact row label, e.g. \\"TAF Fee\\", \\"SEC Fee\\", \\"Dividend\\", \\"Dividend Withholding Tax\\">"
+}
+
+Ticker rule for cash rows:
+- Dividend and Tax: ticker = the security symbol in the label ("Dividend VOO" → "VOO"; "Dividend Withholding Tax VOO" → "VOO").
+- Fee (TAF/SEC): ticker = "USD" (a fee is deducted from USD cash; there is no security).
+
 Critical Dime! format rules:
-- The right side of each row shows a total like "999.86 THB" or "50.00 USD". IGNORE this total for the executedPrice field.
-- "Executed Price" (e.g. "538.44") is ALWAYS USD per share, even when the total is in THB. Output it as-is.
-- "currency" in your output must ALWAYS be "USD" because executedPrice is in USD.
-- "qty" comes from the "Shares" line below executed price.
-- Skip rows displaying "Cancelled".
-- Dates are shown in Asia/Bangkok. Output them EXACTLY as shown, in ISO 8601 with a Z suffix, WITHOUT converting time zones (do NOT add or subtract any hours). Example: "28 Feb 2025 - 03:17:45 AM" → "2025-02-28T03:17:45Z".
+- Buy/Sell: the right side shows a total like "999.86 THB" or "50.00 USD". IGNORE this total. "Executed Price" (e.g. "538.44") is ALWAYS USD per share, even when the total is THB — output it as-is. "currency" is ALWAYS "USD". "qty" comes from the "Shares" line.
+- Cash rows: "value" is the USD number on the right, as a POSITIVE magnitude. Dividends post positive ("Deposit to Dime! USD"); Tax and Fee post negative ("Deduct from Dime! USD") — still output the positive magnitude; the system knows Tax/Fee are outflows.
+- SKIP rows displaying "Cancelled" or "Expired".
+- Dates are shown in Asia/Bangkok. Output them EXACTLY as shown, ISO 8601 with a Z suffix, WITHOUT converting time zones. Example: "28 Feb 2025 - 03:17:45 AM" → "2025-02-28T03:17:45Z".
 - Month headers (e.g. "February 2025") set the year/month context for rows below until the next header.
 - If a field is unreadable, set it to null. Do not invent values.
 
@@ -254,14 +275,22 @@ Deno.serve(async (req) => {
       return json({ error: 'response was not an array', raw: cleaned.slice(0, 300) });
     }
 
-    const valid = (rows as Array<Record<string, unknown>>).filter(r =>
+    const isTrade = (r: Record<string, unknown>) =>
       (r.action === 'Buy' || r.action === 'Sell') &&
       typeof r.ticker === 'string' && r.ticker.length > 0 &&
       typeof r.qty === 'number' && isFinite(r.qty) && r.qty > 0 &&
       typeof r.executedPrice === 'number' && isFinite(r.executedPrice) &&
       (r.currency === 'USD' || r.currency === 'THB') &&
-      typeof r.executedAt === 'string' && r.executedAt.length > 0
-    );
+      typeof r.executedAt === 'string' && r.executedAt.length > 0;
+
+    // Dividend / Fee / Tax — cash rows carry a USD `value` instead of qty/price.
+    const isCashRow = (r: Record<string, unknown>) =>
+      (r.action === 'Dividend' || r.action === 'Fee' || r.action === 'Tax') &&
+      typeof r.ticker === 'string' && r.ticker.length > 0 &&
+      typeof r.value === 'number' && isFinite(r.value) && r.value > 0 &&
+      typeof r.executedAt === 'string' && r.executedAt.length > 0;
+
+    const valid = (rows as Array<Record<string, unknown>>).filter(r => isTrade(r) || isCashRow(r));
 
     return json({ rows: valid, skipped: (rows as unknown[]).length - valid.length });
   } catch (err) {
