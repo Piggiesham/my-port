@@ -187,18 +187,26 @@ export const fmtCurrencySym = (currency) => (currency === 'THB' ? '฿' : '$');
 export const fmtCurrencyCode = (currency) => (currency === 'THB' ? 'THB' : 'USD');
 
 // ----------------------------------------------------------------------------
-// Bangkok-local time helpers. Every user-visible date/time goes through these
-// so the UI doesn't shift around when the user is travelling between time
-// zones. Storage stays UTC; only display + form defaults are Bangkok-local.
+// Bangkok-time helpers.
+//
+// The project stores Bangkok wall-clock time directly in the timestamptz
+// columns — i.e. a trade at 14:30 Bangkok is stored as `...T14:30:00Z`. This
+// is safe because Bangkok is a fixed UTC+7 with no DST, so the stored "UTC"
+// value and the Bangkok wall-clock are one and the same. Consequence: every
+// read/format treats the stored value literally (timeZone 'UTC', no shift),
+// and every write saves the Bangkok parts as-is. The only place we touch the
+// real machine clock is `bkkNowParts`, which derives the current Bangkok
+// wall-clock for form defaults.
 // ----------------------------------------------------------------------------
 export const BKK_TZ = 'Asia/Bangkok';
 export const fmtDateBkk = (d, opts = { day: '2-digit', month: 'short', year: 'numeric' }) =>
-  new Date(d).toLocaleDateString('en-US', { ...opts, timeZone: BKK_TZ });
+  new Date(d).toLocaleDateString('en-US', { ...opts, timeZone: 'UTC' });
 export const fmtTimeBkk = (d, opts = { hour: '2-digit', minute: '2-digit', hour12: true }) =>
-  new Date(d).toLocaleTimeString('en-US', { ...opts, timeZone: BKK_TZ });
+  new Date(d).toLocaleTimeString('en-US', { ...opts, timeZone: 'UTC' });
 export const fmtDateTimeBkk = (d) =>
-  new Date(d).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short', timeZone: BKK_TZ });
-// `now` in Bangkok, split into form-friendly parts.
+  new Date(d).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'UTC' });
+// Current Bangkok wall-clock, split into form-friendly parts. Derived from the
+// real machine clock (+7) so "now" defaults are correct wherever you are.
 export function bkkNowParts() {
   const now = new Date();
   const bkk = new Date(now.getTime() + 7 * 3600_000);
@@ -208,25 +216,25 @@ export function bkkNowParts() {
     time: `${pad(bkk.getUTCHours())}:${pad(bkk.getUTCMinutes())}`,
   };
 }
-// UTC ISO → Bangkok date+time inputs (e.g. for the Edit form).
+// Stored timestamp → Bangkok date+time inputs (e.g. for the Edit form). The
+// stored value is already Bangkok wall-clock, so read it literally (no shift).
 export function utcIsoToBkkParts(iso) {
   if (!iso) return { date: '', time: '' };
   const d = new Date(iso);
   if (isNaN(d.getTime())) return { date: '', time: '' };
-  const b = new Date(d.getTime() + 7 * 3600_000);
   const pad = (n) => String(n).padStart(2, '0');
   return {
-    date: `${b.getUTCFullYear()}-${pad(b.getUTCMonth() + 1)}-${pad(b.getUTCDate())}`,
-    time: `${pad(b.getUTCHours())}:${pad(b.getUTCMinutes())}`,
+    date: `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`,
+    time: `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`,
   };
 }
-// Bangkok wall-clock date+time → UTC ISO (for saving to Postgres).
+// Bangkok date+time parts → ISO string to save. We store the Bangkok
+// wall-clock verbatim (labelled Z), with no offset conversion.
 export function bkkPartsToUtcIso(date, time = '00:00') {
   if (!date) return '';
   const [y, m, d] = date.split('-').map(Number);
   const [hh, mm] = (time || '00:00').split(':').map(Number);
-  const asIfUtc = Date.UTC(y, (m || 1) - 1, d || 1, hh || 0, mm || 0, 0);
-  return new Date(asIfUtc - 7 * 3600_000).toISOString();
+  return new Date(Date.UTC(y, (m || 1) - 1, d || 1, hh || 0, mm || 0, 0)).toISOString();
 }
 
 // Shared Currency context

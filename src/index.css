@@ -202,6 +202,15 @@
   .btn-primary { display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 11px 18px; background: var(--text); color: var(--bg); border-radius: 999px; font-size: 13px; font-weight: 600; white-space: nowrap; }
   .btn-primary:hover { background: #e5e5e7; }
 
+  /* Small inline buttons used by the import fix-and-retry remedies */
+  .btn-mini { display: inline-flex; align-items: center; gap: 5px; padding: 5px 11px; border-radius: 7px;
+    background: var(--panel-2); border: 1px solid var(--border-strong); color: var(--text);
+    font-size: 11.5px; font-weight: 500; white-space: nowrap; cursor: pointer; transition: background 0.12s, border-color 0.12s; }
+  .btn-mini:hover { background: var(--border); }
+  .btn-mini:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-mini-ghost { background: transparent; color: var(--text-faint); border-color: var(--border); }
+  .btn-mini-ghost:hover { background: var(--panel-2); color: var(--text-dim); }
+
   .tx-month-head { font-size: 12px; color: var(--text-faint); letter-spacing: 0.06em; text-transform: uppercase; padding: 22px 24px 12px; font-weight: 500; }
   .tx-row { display: grid; grid-template-columns: 1.55fr 1.05fr 0.85fr 0.95fr 1fr 1fr; gap: 14px; padding: 18px 24px; border-bottom: 1px solid var(--border); align-items: center; transition: background 0.12s; }
   .tx-row:hover { background: rgba(255,255,255,0.02); }

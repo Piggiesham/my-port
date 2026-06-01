@@ -62,7 +62,7 @@ Critical Dime! format rules:
 - "currency" in your output must ALWAYS be "USD" because executedPrice is in USD.
 - "qty" comes from the "Shares" line below executed price.
 - Skip rows displaying "Cancelled".
-- Dates are in Asia/Bangkok (UTC+7). Convert to UTC (subtract 7 hours). Example: "28 Feb 2025 - 03:17:45 AM" Bangkok → "2025-02-27T20:17:45Z".
+- Dates are shown in Asia/Bangkok. Output them EXACTLY as shown, in ISO 8601 with a Z suffix, WITHOUT converting time zones (do NOT add or subtract any hours). Example: "28 Feb 2025 - 03:17:45 AM" → "2025-02-28T03:17:45Z".
 - Month headers (e.g. "February 2025") set the year/month context for rows below until the next header.
 - If a field is unreadable, set it to null. Do not invent values.
 
@@ -85,7 +85,7 @@ For each Buy/Sell row, return one object:
 Rules:
 - The right-hand side shows either a total like "60.00 USD" / "4,999.85 THB" OR a share count like "1 Shares". When it shows a share count, qty equals that number and currency comes from the executed-price context (default USD if no currency shown). When it shows a total, qty comes from the "Shares" row below and currency comes from that total.
 - "Executed Price" is the per-share price.
-- Dates are in Asia/Bangkok timezone (UTC+7). Convert to UTC for the output (subtract 7 hours). Example: "28 Jan 2025 - 07:27:51 AM" Bangkok → "2025-01-28T00:27:51Z".
+- Dates are shown in Asia/Bangkok. Output them EXACTLY as shown, in ISO 8601 with a Z suffix, WITHOUT converting time zones (do NOT add or subtract any hours). Example: "28 Jan 2025 - 07:27:51 AM" → "2025-01-28T07:27:51Z".
 - Month headers (e.g. "December 2024", "November 2024") set the year/month context for the rows under them until a new header appears.
 - If a field is unreadable, set it to null. Do not invent values.
 

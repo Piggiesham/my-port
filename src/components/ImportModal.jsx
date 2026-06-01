@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { SOURCES, PORTFOLIO_TYPES, FX_RATE, utcIsoToBkkParts, bkkPartsToUtcIso, fmtDateBkk, fmtCurrencySym } from '../data.js';
-import { addTransaction, parseTransactionsImage, parseWebullCSV, fetchHistoricalPrice, txFingerprint, importedRowFingerprint, fetchAssetCatalog, createAsset, searchYahooSymbols } from '../lib/api.js';
+import { importTransactions, parseTransactionsImage, parseWebullCSV, fetchHistoricalPrice, txFingerprint, importedRowFingerprint, fetchAssetCatalog, createAsset, searchYahooSymbols } from '../lib/api.js';
 
 // Same mapping used by AddTransactionModal so auto-created assets get the
 // correct internal type label.
@@ -31,14 +31,16 @@ export default function ImportModal({ onClose, onDone, transactions = [] }) {
   const [skipped, setSkipped] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
-  const [results, setResults] = useState(null); // { ok, fail: [{row, err}] }
+  const [results, setResults] = useState(null); // { attempted: true } once a submit has run
+  const [depositEdits, setDepositEdits] = useState({}); // proposed-deposit id → edited amount
   const fileInputRef = useRef(null);
 
   useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape' && !analyzing && !submitting) onClose(); };
+    const onKey = (e) => { if (e.key === 'Escape' && !analyzing && !submitting) closeModal(); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose, analyzing, submitting]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onClose, onDone, analyzing, submitting, rows]);
 
   const source = BROKER_SOURCE[portfolio] || 'image';
 
@@ -129,86 +131,236 @@ export default function ImportModal({ onClose, onDone, transactions = [] }) {
   const patchRow = (id, patch) => setRows(arr => arr.map(r => r._id === id ? { ...r, ...patch } : r));
   const removeRow = (id) => setRows(arr => arr.filter(r => r._id !== id));
 
-  const submitAll = async () => {
-    setSubmitting(true);
-    setError(null);
-    const ok = [];
-    const fail = [];
+  // Close such that the parent refetches if we actually wrote anything —
+  // onDone refreshes + closes, onClose just closes. Covers backdrop / Esc /
+  // the footer button so a partial import is never silently left unrefreshed.
+  const closeModal = () => {
+    if (rows.some(r => r._status === 'ok')) onDone?.();
+    else onClose();
+  };
 
-    // Insert in chronological order so a Sell never lands before its funding
-    // Buy (apply_holdings_delta checks current qty, not a historical view).
-    const selected = rows
-      .filter(r => r._selected)
-      .slice()
-      .sort((a, b) => new Date(a.executedAt) - new Date(b.executedAt));
-
-    // Auto-create any ticker that's not yet in the catalog — fixes
-    // transactions_ticker_fkey failures on first-time imports. createAsset
-    // hits Yahoo for name/sector/logo metadata automatically.
+  // Auto-create any ticker not yet in the catalog so the atomic import
+  // doesn't trip transactions_ticker_fkey (which would roll back the batch).
+  // Asset rows are reference data — harmless to create even if the import
+  // itself later rolls back.
+  const ensureAssets = async (tickers) => {
     let catalog = [];
     try { catalog = await fetchAssetCatalog(); } catch { /* non-fatal */ }
-    const knownTickers = new Set(catalog.map(a => a.ticker.toUpperCase()));
-    const neededTickers = [...new Set(selected.map(r => r.ticker.toUpperCase()))]
-      .filter(t => !knownTickers.has(t));
-    for (const t of neededTickers) {
+    const known = new Set(catalog.map(a => a.ticker.toUpperCase()));
+    for (const t of tickers.filter(t => !known.has(t))) {
       try {
-        // Enrich via Yahoo so the asset row gets a real name + correct type
-        // (ETF vs Stock) instead of just the ticker as a stub.
-        let name = t;
-        let type = 'Stock';
+        let name = t, type = 'Stock';
         try {
-          const results = await searchYahooSymbols(t);
-          const exact = (results || []).find(
-            r => (r.symbol || '').toUpperCase() === t.toUpperCase()
-          );
-          if (exact) {
-            name = exact.name || t;
-            type = YAHOO_TYPE_TO_ASSET[exact.type] || 'Stock';
-          }
-        } catch { /* Yahoo failures non-fatal; we'll fall back to the stub */ }
+          const res = await searchYahooSymbols(t);
+          const exact = (res || []).find(x => (x.symbol || '').toUpperCase() === t.toUpperCase());
+          if (exact) { name = exact.name || t; type = YAHOO_TYPE_TO_ASSET[exact.type] || 'Stock'; }
+        } catch { /* fall back to stub */ }
         await createAsset({ ticker: t, name, type });
-        knownTickers.add(t);
+        known.add(t);
       } catch (err) {
-        // If asset creation fails, the per-row insert below will fail with a
-        // clearer FK error and the user can see which ticker is the problem.
         console.warn('[import] createAsset failed for', t, err?.message || err);
       }
     }
+  };
 
-    for (const r of selected) {
-      try {
-        const dateStr = r.executedAt.slice(0, 10);
-        let fx = FX_RATE;
-        try {
-          const p = await fetchHistoricalPrice('THB', dateStr);
-          if (p && p > 0) fx = 1 / p;
-        } catch { /* fall back to default */ }
-        const priceUsd = r.currency === 'THB' ? r.executedPrice / fx : r.executedPrice;
-        const qty = Number(r.qty) || 0;
-        const valueUsd = qty * priceUsd;
-        const feesUsd  = r.currency === 'THB' ? (Number(r.fees)  || 0) / fx : (Number(r.fees)  || 0);
-        const taxesUsd = r.currency === 'THB' ? (Number(r.taxes) || 0) / fx : (Number(r.taxes) || 0);
-        await addTransaction({
-          portfolio,
-          ticker: r.ticker.toUpperCase(),
-          action: r.action,
-          shares: qty,
-          price: priceUsd,
-          valueUsd,
-          fees: feesUsd,
-          taxes: taxesUsd,
-          description: 'import',
-          executedAt: r.executedAt,
-          fxRateAtTx: fx,
-        });
-        ok.push(r._id);
-      } catch (err) {
-        fail.push({ id: r._id, ticker: r.ticker, err: err.message || String(err) });
+  // Resolve the day's USD-per-THB so THB-priced rows convert correctly.
+  const fxForDate = async (iso) => {
+    let fx = FX_RATE;
+    try {
+      const p = await fetchHistoricalPrice('THB', iso.slice(0, 10));
+      if (p && p > 0) fx = 1 / p;
+    } catch { /* default */ }
+    return fx;
+  };
+
+  const isoBefore = (iso) => new Date(new Date(iso).getTime() - 1000).toISOString();
+
+  // Friendly read of a rolled-back row's RPC error. The RPCs raise stable,
+  // parseable messages, wrapped by import_transactions as "row N (...): <msg>".
+  //   "USD cash at dime goes negative — lowest point: -55.40"
+  //   "Not enough shares: dime has 0 of INTC, attempted delta -8.36"
+  const diagnose = (msg = '') => {
+    let m = msg.match(/(\w+)\s+cash at\s+\S+\s+goes negative.*?(-?[\d.]+)/);
+    if (m) return { kind: 'cash', currency: m[1], shortfall: Math.abs(parseFloat(m[2])) };
+    m = msg.match(/Not enough shares:\s*\S+\s+has\s+(-?[\d.]+)\s+of\s+(\S+).*?delta\s+(-?[\d.]+)/);
+    if (m) return { kind: 'shares', heldQty: parseFloat(m[1]), ticker: m[2].replace(/,$/, ''), needed: Math.abs(parseFloat(m[3])) };
+    return { kind: 'other' };
+  };
+
+  const skipRow = (id) => patchRow(id, { _status: 'skip', _selected: false });
+
+  // ---- Pre-flight: simulate the batch and propose fixes up front -----------
+  // Replays the selected rows' USD cash + per-ticker share trajectory starting
+  // from the current DB balances, so we can fund every Buy and flag orphan
+  // Sells *before* importing. Dime! securities settle in USD, so funding
+  // deposits are USD. THB-priced rows convert at the constant FX_RATE here
+  // (good enough for the estimate; the real insert uses historical FX).
+  const TOL = 0.000001;
+  const rowCostUsd = (r) => {
+    const qty = Number(r.qty) || 0;
+    const priceUsd = r.currency === 'THB' ? (Number(r.executedPrice) || 0) / FX_RATE : (Number(r.executedPrice) || 0);
+    const fees = Number(r.fees) || 0, taxes = Number(r.taxes) || 0;
+    return { buy: qty * priceUsd + fees + taxes, sell: qty * priceUsd - fees - taxes };
+  };
+
+  const preflight = useMemo(() => {
+    if (!portfolio) return { deposits: [], orphans: [] };
+    const sel = rows.filter(r => r._selected && r._status !== 'ok' && r._status !== 'skip');
+    if (sel.length === 0) return { deposits: [], orphans: [] };
+
+    // Build the FULL merged timeline — existing committed transactions for this
+    // brokerage plus the new rows — and replay it from zero in date order. This
+    // mirrors exactly what the atomic RPC's cash-trajectory check sees. Walking
+    // only the new rows from today's balance is wrong for back-dated imports:
+    // at an earlier date the real balance is lower than today's total, so
+    // shortfalls get missed and the RPC then rejects a row pre-flight "approved".
+    const events = [];
+    for (const t of transactions) {
+      if (t.source !== portfolio) continue;            // existing → order 0
+      const tk = (t.ticker || '').toUpperCase();
+      const shares = Number(t.shares) || 0;
+      const price = Number(t.price) || 0;
+      const fees = Number(t.fees) || 0;
+      const taxes = Number(t.taxes) || 0;
+      const value = Number(t.valueUSD) || 0;
+      let cash = 0, sh = 0;
+      if (t.action === 'Deposit')       cash = tk === 'USD' ? shares : 0;
+      else if (t.action === 'Withdraw') cash = tk === 'USD' ? -shares : 0;
+      else if (t.action === 'Buy')      { cash = -(shares * price + fees + taxes); sh = shares; }
+      else if (t.action === 'Sell')     { cash = (shares * price - fees - taxes); sh = -shares; }
+      else if (t.action === 'Dividend') cash = value;
+      events.push({ ms: new Date(t.date).getTime(), order: 0, ticker: tk, cash, sh });
+    }
+    for (const r of sel) {                              // new rows → order 1
+      const tk = (r.ticker || '').toUpperCase();
+      const qty = Number(r.qty) || 0;
+      const { buy, sell } = rowCostUsd(r);
+      if (r.action === 'Buy')       events.push({ ms: new Date(r.executedAt).getTime(), order: 1, ticker: tk, newBuy: true, rowId: r._id, iso: r.executedAt, cost: buy, sh: qty });
+      else if (r.action === 'Sell') events.push({ ms: new Date(r.executedAt).getTime(), order: 1, ticker: tk, newSell: true, rowId: r._id, iso: r.executedAt, proceeds: sell, qty });
+    }
+    events.sort((a, b) => a.ms - b.ms || a.order - b.order);
+
+    // Pass 1 — replay shares; a new Sell that exceeds shares held at that point
+    // is an orphan (no Buy behind it).
+    const held = {};
+    const orphans = [];
+    const orphanIds = new Set();
+    for (const e of events) {
+      const tk = e.ticker;
+      if (!tk || tk === 'USD' || tk === 'THB') continue;
+      if (held[tk] == null) held[tk] = 0;
+      if (e.newSell) {
+        if (held[tk] - e.qty < -1e-6) { orphans.push({ rowId: e.rowId, ticker: tk, need: e.qty, held: Math.max(0, held[tk]) }); orphanIds.add(e.rowId); continue; }
+        held[tk] -= e.qty;
+      } else {
+        held[tk] += e.sh || 0;
       }
     }
-    setResults({ ok: ok.length, fail });
-    setSubmitting(false);
-    if (fail.length === 0) onDone?.();
+
+    // Pass 2 — replay USD cash; fund each new Buy that would dip below zero.
+    let bal = 0;
+    const deposits = [];
+    for (const e of events) {
+      if (e.rowId && orphanIds.has(e.rowId)) continue;  // skipped sells: no cash effect
+      if (e.newBuy) {
+        if (bal - e.cost < -TOL) {
+          const need = Math.ceil((e.cost - bal) * 100) / 100;
+          deposits.push({ id: `dep-${e.rowId}`, amount: need, beforeIso: isoBefore(e.iso), forTicker: e.ticker });
+          bal += need;
+        }
+        bal -= e.cost;
+      } else if (e.newSell) {
+        bal += e.proceeds;
+      } else {
+        bal += e.cash;                                   // existing transaction
+      }
+    }
+    return { deposits, orphans };
+  }, [rows, transactions, portfolio]);
+
+  const depositAmount = (d) => {
+    const edited = depositEdits[d.id];
+    const n = edited === undefined ? d.amount : parseFloat(edited);
+    return isFinite(n) && n > 0 ? n : 0;
+  };
+
+  // Build the chronologically-ordered batch (funding deposits + trades) with
+  // FX resolved, plus a parallel `meta` array so a server-side "row N" error
+  // maps back to the offending preview row.
+  const buildBatch = async (tradeRows, deposits) => {
+    const entries = [];
+    for (const d of deposits) {
+      const amt = depositAmount(d);
+      if (amt <= 0) continue;
+      entries.push({
+        sortIso: d.beforeIso,
+        meta: { kind: 'deposit' },
+        item: { portfolio, ticker: 'USD', action: 'Deposit', shares: amt, price: 1, valueUsd: amt, description: 'import-fix', executedAt: d.beforeIso },
+      });
+    }
+    for (const r of tradeRows) {
+      const fx = await fxForDate(r.executedAt);
+      const priceUsd = r.currency === 'THB' ? (Number(r.executedPrice) || 0) / fx : (Number(r.executedPrice) || 0);
+      const qty = Number(r.qty) || 0;
+      const feesUsd  = r.currency === 'THB' ? (Number(r.fees)  || 0) / fx : (Number(r.fees)  || 0);
+      const taxesUsd = r.currency === 'THB' ? (Number(r.taxes) || 0) / fx : (Number(r.taxes) || 0);
+      entries.push({
+        sortIso: r.executedAt,
+        meta: { kind: 'trade', rowId: r._id },
+        item: { portfolio, ticker: r.ticker.toUpperCase(), action: r.action, shares: qty, price: priceUsd, valueUsd: qty * priceUsd, fees: feesUsd, taxes: taxesUsd, description: 'import', executedAt: r.executedAt, fxRateAtTx: fx },
+      });
+    }
+    entries.sort((a, b) => new Date(a.sortIso) - new Date(b.sortIso));
+    return { items: entries.map(e => e.item), meta: entries.map(e => e.meta) };
+  };
+
+  // Atomic import: one RPC call inserts the whole batch in a single DB
+  // transaction. Success → every row committed. Failure → nothing committed
+  // (rolled back); we flag the offending row and leave the preview editable so
+  // the user can fix and import again.
+  const runImport = async (tradeRows, deposits) => {
+    if (tradeRows.length === 0) return;
+    setSubmitting(true);
+    setError(null);
+    tradeRows.forEach(r => { if (r._status === 'fail') patchRow(r._id, { _status: undefined, _error: null }); });
+
+    let batch;
+    try {
+      await ensureAssets([...new Set(tradeRows.map(r => r.ticker.toUpperCase()))]);
+      batch = await buildBatch(tradeRows, deposits);
+    } catch (err) {
+      setError(`Couldn't prepare import: ${err.message || err}`);
+      setSubmitting(false);
+      return;
+    }
+
+    try {
+      await importTransactions(batch.items);
+      tradeRows.forEach(r => patchRow(r._id, { _status: 'ok', _error: null, _selected: false }));
+      setResults({ attempted: true });
+    } catch (err) {
+      const msg = err.message || String(err);
+      const m = msg.match(/row\s+(\d+)\b/);
+      if (m) {
+        const meta = batch.meta[parseInt(m[1], 10) - 1];
+        if (meta?.kind === 'trade') patchRow(meta.rowId, { _status: 'fail', _error: msg });
+      }
+      setError(`Import rolled back — nothing was saved. ${msg}`);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // Kick off an import: skip orphan sells (no shares to back them), then run
+  // the atomic batch of remaining trades + their funding deposits. Re-runnable
+  // after a rollback — same button handles the first attempt and retries.
+  const startImport = async () => {
+    const orphanIds = new Set(preflight.orphans.map(o => o.rowId));
+    orphanIds.forEach(id => skipRow(id));
+    const trades = rows.filter(r =>
+      r._selected && r._status !== 'ok' && r._status !== 'skip' && !orphanIds.has(r._id)
+    );
+    await runImport(trades, preflight.deposits);
   };
 
   // ---- Step renderers -------------------------------------------------------
@@ -326,6 +478,11 @@ export default function ImportModal({ onClose, onDone, transactions = [] }) {
     [rows]
   );
 
+  const okCount = rows.filter(r => r._status === 'ok').length;
+  const failedRows = rows.filter(r => r._status === 'fail');
+  const skippedCount = rows.filter(r => r._status === 'skip').length;
+  const hasSubmitted = !!results;
+
   const renderPreview = () => (
     <div className="modal-body">
       {(() => {
@@ -349,8 +506,13 @@ export default function ImportModal({ onClose, onDone, transactions = [] }) {
             const expanded = r._id === expandedRowId;
             const actionColor = r.action === 'Buy' ? 'var(--green)' : 'var(--red)';
             const priceStr = (Number(r.executedPrice) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 6 });
+            const dg = r._status === 'fail' ? diagnose(r._error) : null;
+            const borderColor = r._status === 'fail' ? 'rgba(248,113,113,0.5)'
+              : r._status === 'ok' ? 'rgba(74,222,128,0.4)'
+              : 'var(--border)';
+            const rowOpacity = r._status === 'ok' || r._status === 'skip' ? 0.55 : (r._selected ? 1 : 0.45);
             return (
-              <div key={r._id} style={{ border: '1px solid var(--border)', borderRadius: 8, opacity: r._selected ? 1 : 0.45 }}>
+              <div key={r._id} style={{ border: `1px solid ${borderColor}`, borderRadius: 8, opacity: rowOpacity }}>
                 {/* Collapsed row — click anywhere except the checkbox to toggle expand */}
                 <div
                   onClick={() => setExpandedRowId(expanded ? null : r._id)}
@@ -380,13 +542,45 @@ export default function ImportModal({ onClose, onDone, transactions = [] }) {
                     {fmtCurrencySym(r.currency)}{priceStr} {r.currency}
                   </span>
                   <span style={{ minWidth: 80, textAlign: 'right' }}>
-                    {r._duplicate && (
+                    {r._status === 'ok' && (
+                      <span style={{ fontSize: 11, color: 'var(--green)' }}>✓ imported</span>
+                    )}
+                    {r._status === 'skip' && (
+                      <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>skipped</span>
+                    )}
+                    {r._status === 'fail' && (
+                      <span style={{ fontSize: 11, color: 'var(--red)' }}>✗ failed</span>
+                    )}
+                    {!r._status && r._duplicate && (
                       <span style={{ fontSize: 10, color: 'var(--text-faint)', padding: '2px 6px', background: 'var(--panel-2)', border: '1px solid var(--border)', borderRadius: 4 }}>
                         duplicate ({r._duplicate === 'db' ? 'in DB' : 'in batch'})
                       </span>
                     )}
                   </span>
                 </div>
+
+                {/* Failure strip — this row caused the rollback. Fix it (edit or
+                    skip), then import again. Nothing was committed. */}
+                {r._status === 'fail' && (
+                  <div style={{ padding: '8px 12px', borderTop: '1px solid var(--border)', background: 'rgba(248,113,113,0.06)' }}>
+                    <div style={{ fontSize: 11.5, color: 'var(--red)', marginBottom: 8 }}>
+                      Rolled back the import here — {' '}
+                      {dg.kind === 'cash'
+                        ? `not enough ${dg.currency} cash to fund this (short ${fmtCurrencySym(dg.currency)}${dg.shortfall.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}). Bump the funding deposit below, or skip this row.`
+                        : dg.kind === 'shares'
+                        ? `no shares to sell (you hold ${Math.max(0, dg.heldQty)} ${dg.ticker}, this sells ${dg.needed}). Skip it or add the missing Buy.`
+                        : r._error}
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }} onClick={e => e.stopPropagation()}>
+                      <button type="button" className="btn-mini" disabled={submitting} onClick={() => setExpandedRowId(expanded ? null : r._id)}>
+                        Edit
+                      </button>
+                      <button type="button" className="btn-mini btn-mini-ghost" disabled={submitting} onClick={() => skipRow(r._id)}>
+                        Skip
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 {/* Expanded edit form — only renders when this row is the active one */}
                 {expanded && (
@@ -429,17 +623,58 @@ export default function ImportModal({ onClose, onDone, transactions = [] }) {
           })}
         </div>
       )}
-      {results && (
-        <div style={{ marginTop: 12, fontSize: 12 }}>
-          <div style={{ color: 'var(--green)' }}>Imported: {results.ok}</div>
-          {results.fail.length > 0 && (
-            <div style={{ color: 'var(--red)', marginTop: 4 }}>
-              Failed: {results.fail.length}
-              <ul style={{ margin: '4px 0 0 18px', padding: 0 }}>
-                {results.fail.map(f => <li key={f.id}>{f.ticker}: {f.err}</li>)}
-              </ul>
+      {!hasSubmitted && (preflight.deposits.length > 0 || preflight.orphans.length > 0) && (
+        <div style={{ marginTop: 12, padding: '12px 14px', border: '1px solid var(--border-strong)', borderRadius: 10, background: 'var(--panel)' }}>
+          <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)', marginBottom: 8 }}>
+            Pre-flight check — fixes needed before this imports cleanly
+          </div>
+
+          {preflight.deposits.length > 0 && (
+            <div style={{ marginBottom: preflight.orphans.length ? 12 : 0 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-dim)', marginBottom: 6 }}>
+                {preflight.deposits.length} funding deposit{preflight.deposits.length === 1 ? '' : 's'} — your Buys cost more USD cash than is on record:
+              </div>
+              {preflight.deposits.map(d => (
+                <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, padding: '4px 0' }}>
+                  <span style={{ color: 'var(--green)' }}>+ Deposit</span>
+                  <span style={{ color: 'var(--text-faint)' }}>$</span>
+                  <input
+                    className="field-input"
+                    value={depositEdits[d.id] === undefined ? d.amount : depositEdits[d.id]}
+                    onChange={e => setDepositEdits(s => ({ ...s, [d.id]: e.target.value }))}
+                    inputMode="decimal"
+                    style={{ width: 90, fontSize: 12, padding: '4px 8px' }}
+                  />
+                  <span style={{ color: 'var(--text-faint)' }}>USD before {fmtDateBkk(d.beforeIso)}</span>
+                  <span style={{ color: 'var(--text-faint)', marginLeft: 'auto' }}>to fund {d.forTicker}</span>
+                </div>
+              ))}
             </div>
           )}
+
+          {preflight.orphans.length > 0 && (
+            <div>
+              <div style={{ fontSize: 11, color: 'var(--text-dim)', marginBottom: 6 }}>
+                {preflight.orphans.length} orphan sell{preflight.orphans.length === 1 ? '' : 's'} — selling shares with no prior Buy on record. These are skipped:
+              </div>
+              {preflight.orphans.map(o => (
+                <div key={o.rowId} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, padding: '4px 0' }}>
+                  <span style={{ color: 'var(--red)' }}>Sell {o.ticker}</span>
+                  <span style={{ color: 'var(--text-faint)' }}>need {o.need}, hold {o.held}</span>
+                  <span style={{ marginLeft: 'auto', color: 'var(--text-faint)' }}>will skip</span>
+                </div>
+              ))}
+              <div style={{ fontSize: 10.5, color: 'var(--text-faint)', marginTop: 2 }}>
+                If a Buy for these is missing, add it (import the earlier screenshot or enter it manually), then re-import.
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+      {hasSubmitted && (
+        <div style={{ marginTop: 12, fontSize: 12, display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+          <span style={{ color: 'var(--green)' }}>✓ Imported {okCount} row{okCount === 1 ? '' : 's'} — committed atomically.</span>
+          {skippedCount > 0 && <span style={{ color: 'var(--text-faint)' }}>Skipped: {skippedCount}</span>}
         </div>
       )}
     </div>
@@ -451,7 +686,7 @@ export default function ImportModal({ onClose, onDone, transactions = [] }) {
                   : 'Import — review rows';
 
   return (
-    <div className="modal-backdrop" onClick={analyzing || submitting ? undefined : onClose}>
+    <div className="modal-backdrop" onClick={analyzing || submitting ? undefined : closeModal}>
       <div className="modal" onClick={e => e.stopPropagation()}>
         <div className="modal-head">
           <div>
@@ -463,7 +698,7 @@ export default function ImportModal({ onClose, onDone, transactions = [] }) {
               </div>
             )}
           </div>
-          <button className="modal-close" onClick={onClose} aria-label="Close" disabled={analyzing || submitting}>
+          <button className="modal-close" onClick={closeModal} aria-label="Close" disabled={analyzing || submitting}>
             <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5 5l10 10M15 5L5 15" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>
           </button>
         </div>
@@ -489,13 +724,28 @@ export default function ImportModal({ onClose, onDone, transactions = [] }) {
                 })()}
               </button>
             )}
-            {step === 'preview' && (
-              <button className="btn-primary" disabled={submitting || rows.filter(r => r._selected).length === 0} onClick={submitAll}>
-                {submitting ? 'Importing…' : `Import ${rows.filter(r => r._selected).length} row${rows.filter(r => r._selected).length === 1 ? '' : 's'}`}
+            {step === 'preview' && !hasSubmitted && (() => {
+              // Importable = selected, not already done, not skipped, not an orphan sell.
+              const orphanIds = new Set(preflight.orphans.map(o => o.rowId));
+              const importable = rows.filter(r => r._selected && r._status !== 'ok' && r._status !== 'skip' && !orphanIds.has(r._id)).length;
+              const hasFixes = preflight.deposits.length > 0 || preflight.orphans.length > 0;
+              const retrying = failedRows.length > 0;
+              return (
+                <button className="btn-primary" disabled={submitting || importable === 0} onClick={startImport}>
+                  {submitting ? 'Importing…'
+                    : retrying ? `Fix & import again (${importable})`
+                    : hasFixes ? `Approve fixes & import ${importable} row${importable === 1 ? '' : 's'}`
+                    : `Import ${importable} row${importable === 1 ? '' : 's'}`}
+                </button>
+              );
+            })()}
+            {step === 'preview' && hasSubmitted && (
+              <button className="btn-primary" disabled={submitting} onClick={() => onDone?.()}>
+                Done
               </button>
             )}
-            <button className="btn-secondary" onClick={onClose} disabled={analyzing || submitting}>
-              {results && results.fail.length === 0 ? 'Done' : 'Cancel'}
+            <button className="btn-secondary" onClick={closeModal} disabled={analyzing || submitting}>
+              {hasSubmitted ? 'Close' : 'Cancel'}
             </button>
           </div>
         </div>

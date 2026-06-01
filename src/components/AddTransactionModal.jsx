@@ -517,6 +517,13 @@ export default function AddTransactionModal({ onClose, onAdded, transactions = [
     if (iso && iso !== dateIso) setDateIso(iso);
   }, [dateText]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Cash deposits default to 00:01 (first minute of the day) so they always
+  // sort before same-day Buys in the cash-trajectory check. Any other type
+  // defaults to the current Bangkok time. Still editable under Advanced.
+  useEffect(() => {
+    setTime(txType === 'Deposit' ? '00:01' : bkkNowParts().time);
+  }, [txType]);
+
   const isCashFlow = txType === 'Deposit' || txType === 'Withdraw';
   const fxNum = parseFloat(fxRate) || FX_RATE;
   const toUsd = (v, ccy) => (ccy === 'THB' ? v / fxNum : v);

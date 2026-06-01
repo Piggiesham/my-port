@@ -163,6 +163,18 @@ export async function updateTransaction(txId, args) {
   }
 }
 
+// Atomic bulk import — all rows commit together or none do. `items` is an
+// array of addTransaction-style args; they're sent pre-built to the
+// import_transactions RPC, which loops them in one transaction and aborts the
+// whole batch on any failure. Caller must order items chronologically.
+export async function importTransactions(items) {
+  if (!supabaseEnabled) throw new Error('Supabase not configured');
+  const payloads = items.map(a => ({ ...buildTxPayload(a), fx_rate_at_tx: a.fxRateAtTx ?? null }));
+  const { data, error } = await supabase.rpc('import_transactions', { p_txs: payloads });
+  if (error) throw error;
+  return data; // array of new uuids
+}
+
 export async function deleteTransaction(txId) {
   if (!supabaseEnabled) throw new Error('Supabase not configured');
   const { error } = await supabase.rpc('revert_transaction', { tx_id: txId });
@@ -719,7 +731,7 @@ export function parseWebullCSV(text) {
       continue;
     }
     const [, dd, mm, yyyy] = dm;
-    const executedAt = `${yyyy}-${mm}-${dd}T05:00:00Z`; // ~noon Bangkok
+    const executedAt = `${yyyy}-${mm}-${dd}T12:00:00Z`; // noon Bangkok (stored as-is)
 
     rows.push({
       action,
