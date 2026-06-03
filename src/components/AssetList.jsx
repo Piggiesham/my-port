@@ -7,6 +7,7 @@ const SORT_OPTIONS = [
   { key: 'plUSD',      label: 'P/L Amount' },
   { key: 'alloc',      label: 'Allocation' },
   { key: 'price',      label: 'Market Price' },
+  { key: 'avgCost',    label: 'Avg Cost' },
   { key: 'ticker',     label: 'Ticker (A-Z)' },
 ];
 
@@ -25,15 +26,25 @@ export default function AssetList({ assets = ASSETS, portfolio = 'All' }) {
     return () => document.removeEventListener('mousedown', onClick);
   }, []);
 
+  // Avg Cost values for sorting: USD = a.cost (per-share); THB = a.thbAvgCost.
+  // Cash rows render "—" so they're sorted to the bottom (treated as -Infinity).
+  const avgCostValue = (a) => {
+    if (a.isCash) return -Infinity;
+    if (cur.currency === 'THB') return Number(a.thbAvgCost) || 0;
+    return Number(a.cost) || 0;
+  };
   const sorted = useMemo(() => {
     const arr = [...assets];
     if (sortKey === 'ticker') {
       arr.sort((a, b) => a.ticker.localeCompare(b.ticker));
+    } else if (sortKey === 'avgCost') {
+      arr.sort((a, b) => avgCostValue(b) - avgCostValue(a));
     } else {
       arr.sort((a, b) => (Number(b[sortKey]) || 0) - (Number(a[sortKey]) || 0));
     }
     return arr;
-  }, [sortKey, assets]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sortKey, assets, cur.currency]);
 
   const fmtPrice = (a) => {
     if (a.isCash) return '—';
@@ -45,6 +56,23 @@ export default function AssetList({ assets = ASSETS, portfolio = 'All' }) {
   const fmtAltHolding = (usd) => {
     const v = altCurrency === 'THB' ? usd * fx : usd;
     return v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ' + altCurrency;
+  };
+
+  // Avg Cost cell: per-share in USD (a.cost, today) or THB (a.thbAvgCost,
+  // historical FX — see ADR 0002). Cash rows show "—". A "~" prefix appears
+  // when any buy lacked a historical FX rate; backfillHistoricalFx clears it.
+  const fmtAvgCost = (a) => {
+    if (a.isCash) return { main: '—', sub: '', approx: false };
+    if (cur.currency === 'THB') {
+      const v = Number(a.thbAvgCost) || 0;
+      if (v <= 0) return { main: '—', sub: '', approx: false };
+      const approx = !!a.thbApprox;
+      const txt = v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      return { main: (approx ? '~' : '') + txt, sub: 'THB', approx };
+    }
+    const v = Number(a.cost) || 0;
+    if (v <= 0) return { main: '—', sub: '', approx: false };
+    return { main: v >= 1000 ? v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : v.toFixed(2), sub: 'USD', approx: false };
   };
 
   return (
@@ -75,6 +103,7 @@ export default function AssetList({ assets = ASSETS, portfolio = 'All' }) {
       <div className="list-head">
         <div>{assets.length} {assets.length === 1 ? 'asset' : 'assets'}{portfolio !== 'All' ? ` · ${portfolio}` : ''}</div>
         <div>Market Price ({fmtCurrencyCode(cur.currency)})</div>
+        <div>Avg Cost ({fmtCurrencyCode(cur.currency)})</div>
         <div>Holding Value ({fmtCurrencyCode(cur.currency)})</div>
         <div>% Profit &amp; Amount</div>
       </div>
@@ -117,6 +146,18 @@ export default function AssetList({ assets = ASSETS, portfolio = 'All' }) {
                 <div className="price-sub">{fmtCurrencyCode(cur.currency)}</div>
               </div>
             </div>
+
+            {(() => {
+              const ac = fmtAvgCost(a);
+              return (
+                <div className="cell-r" data-label="Avg Cost" title={ac.approx ? 'Approximate — some buys are missing historical FX. Run backfillHistoricalFx() to remove the ~.' : undefined}>
+                  <div>
+                    <div className="price-main" style={ac.approx ? { color: 'var(--text-dim)' } : undefined}>{ac.main}</div>
+                    {ac.sub && <div className="price-sub">{ac.sub}</div>}
+                  </div>
+                </div>
+              );
+            })()}
 
             <div className="cell-r" data-label="Holding">
               <div>

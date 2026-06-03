@@ -256,6 +256,54 @@ export function computeSharesHeld(transactions, brokerage, ticker) {
   return qty;
 }
 
+// Per (source, ticker) historical-FX cost basis in THB. Replays Buys with each
+// one's fx_rate_at_tx so the resulting weighted avg reflects the baht the user
+// actually paid — see docs/adr/0002-average-cost-uses-historical-fx.md.
+// Sells reduce qty but not the per-share THB cost (mirrors apply_holdings_delta
+// avg-cost semantics). A Buy missing fx_rate_at_tx marks the position as
+// `approx: true` and uses today's FX_RATE for that one buy — the cell renders
+// with a "~" prefix until backfillHistoricalFx() runs.
+// Returns Map<"source|ticker", { qty, thbCostTotal, thbPerShare, approx }>.
+export function computeThbCostByKey(transactions) {
+  const out = new Map();
+  const sorted = [...(transactions || [])].sort(
+    (a, b) => new Date(a.date) - new Date(b.date)
+  );
+  for (const t of sorted) {
+    const action = t.action;
+    if (action !== 'Buy' && action !== 'Sell') continue;       // dividends/fees/tax don't move basis
+    const tk = (t.ticker || '').toUpperCase();
+    if (!tk) continue;
+    const key = `${t.source}|${tk}`;
+    const cur = out.get(key) || { qty: 0, thbCostTotal: 0, approx: false };
+    const shares = Number(t.shares) || 0;
+    if (shares <= 0) { out.set(key, cur); continue; }
+
+    if (action === 'Buy') {
+      const priceUsd = Number(t.price) || 0;
+      let fx = Number(t.fx_rate_at_tx);
+      let approxThis = false;
+      if (!fx || fx <= 0) { fx = MOCK_FX_RATE; approxThis = true; }
+      cur.qty += shares;
+      cur.thbCostTotal += shares * priceUsd * fx;             // baht paid for these shares
+      if (approxThis) cur.approx = true;
+    } else if (action === 'Sell') {
+      // Per-share THB avg cost is preserved across sells; reduce qty and basis
+      // proportionally so thbPerShare stays the same.
+      const perShare = cur.qty > 0 ? cur.thbCostTotal / cur.qty : 0;
+      cur.qty = Math.max(0, cur.qty - shares);
+      cur.thbCostTotal = cur.qty * perShare;
+      if (cur.qty === 0) cur.approx = false;                  // fresh start if reopened
+    }
+    out.set(key, cur);
+  }
+  for (const [k, v] of out) {
+    v.thbPerShare = v.qty > 0 ? v.thbCostTotal / v.qty : 0;
+    out.set(k, v);
+  }
+  return out;
+}
+
 export function computeCashBalance(transactions, brokerage, currency, catalog = []) {
   const settlementByTicker = Object.fromEntries(
     (catalog || []).map(a => [a.ticker, a.settlement_currency || (a.is_cash ? a.ticker : 'USD')])

@@ -40,6 +40,20 @@ specific Buy/Sell.
 An order row that never executed (Dime! labels it "Expired" or "Cancelled"). Not
 a transaction at all — must be excluded from any import.
 
+### Combined-ticker view
+The portfolio-wide ("All") rendering of holdings on the Overview, in which rows
+for the same ticker held at multiple brokerages are merged into a single line.
+Same-ticker only — different cash currencies (e.g. USD and THB) stay distinct
+rows because their per-unit meaning differs. A per-brokerage view never
+combines, because each brokerage holds at most one row per ticker.
+
+On a combined row:
+- **Quantity** is the sum of the per-brokerage quantities.
+- **Cost basis** is the sum of the per-brokerage cost-basis dollars (`Σ qty·cost`).
+- **Average cost** is the derived per-share weighted average (`cost basis / qty`).
+- **Source** is a sentinel — the literal label "Multiple" — rather than any one
+  brokerage's tag.
+
 ### Insufficient-funds error
 Raised when importing or editing a transaction would make a cash trajectory dip
 below zero. Today it is most often a *false* error: the buy was really funded by

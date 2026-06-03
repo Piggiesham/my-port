@@ -1,6 +1,6 @@
 import { useState, useMemo, useRef, useEffect, useCallback, Fragment } from 'react';
 import { CurrencyContext, SOURCES, PORTFOLIOS, ASSETS as MOCK_ASSETS, TRANSACTIONS as MOCK_TRANSACTIONS, totalsFor, fmtCurrency, FX_RATE, setFxRate, fmtDateBkk } from './data.js';
-import { fetchTransactions, fetchFxRate, fetchPriceMap, fetchAssetCatalog, computeAssetsFromTransactions } from './lib/api.js';
+import { fetchTransactions, fetchFxRate, fetchPriceMap, fetchAssetCatalog, computeAssetsFromTransactions, computeThbCostByKey } from './lib/api.js';
 import { supabaseEnabled } from './lib/supabase.js';
 import ReturnChart from './components/ReturnChart.jsx';
 import PieChart from './components/PieChart.jsx';
@@ -56,14 +56,66 @@ export default function App() {
     return ['All', ...(dynamic.length > 0 ? dynamic : PORTFOLIOS.filter(p => p !== 'All'))];
   }, [transactions]);
 
-  const filteredAssets = useMemo(() => {
-    if (portfolio === 'All') return assets;
-    const filtered = assets.filter(a => a.source === portfolio);
-    const total = filtered.reduce((s, a) => s + a.holdingUSD, 0) || 1;
-    return filtered.map(a => ({ ...a, alloc: (a.holdingUSD / total) * 100 }));
-  }, [portfolio, assets]);
+  // Per (source, ticker) historical-FX baht cost, used by AssetList for the
+  // Avg Cost column in THB mode. See docs/adr/0002-average-cost-uses-historical-fx.md.
+  const thbCostByKey = useMemo(() => computeThbCostByKey(transactions), [transactions]);
 
-  const { now: totalNow, cost: totalCost } = useMemo(() => totalsFor(filteredAssets), [filteredAssets]);
+  // PieChart and AssetList need different shapes on "All":
+  //  - PieChart wants raw rows so the "By Source" breakdown still segments
+  //    per brokerage (combining would collapse it into one "Multiple" slice).
+  //  - AssetList wants same-ticker rows merged into one line tagged "Multiple"
+  //    (the user-facing combined-ticker view).
+  // Per-brokerage views never combine (one row per ticker per brokerage).
+  // See CONTEXT.md → "Combined-ticker view".
+  const filteredAssetsRaw = useMemo(() => {
+    const base = portfolio === 'All'
+      ? assets
+      : assets.filter(a => a.source === portfolio);
+    const total = base.reduce((s, a) => s + a.holdingUSD, 0) || 1;
+    const annotated = base.map(a => {
+      const key = `${a.source}|${a.ticker}`;
+      const thb = thbCostByKey.get(key);
+      return {
+        ...a,
+        alloc: (a.holdingUSD / total) * 100,
+        thbAvgCost: thb ? thb.thbPerShare : null,
+        thbApprox:  thb ? thb.approx     : false,
+      };
+    });
+    return annotated;
+  }, [portfolio, assets, thbCostByKey]);
+
+  const filteredAssetsCombined = useMemo(() => {
+    if (portfolio !== 'All') return filteredAssetsRaw;
+    // Merge same-ticker rows: sum qty + cost-basis dollars, derive per-share
+    // avg, blend historical-FX baht cost across contributors, source = 'Multiple'
+    // when >1 brokerage. Keeps holdingUSD/plUSD/pctProfit/alloc consistent.
+    const byTicker = new Map();
+    for (const a of filteredAssetsRaw) {
+      const cur = byTicker.get(a.ticker);
+      if (!cur) { byTicker.set(a.ticker, { ...a, _sources: [a.source], _costTotal: a.qty * a.cost, _thbCostTotal: (a.thbAvgCost ?? 0) * a.qty, _thbApprox: !!a.thbApprox }); continue; }
+      cur.qty        += a.qty;
+      cur.holdingUSD += a.holdingUSD;
+      cur.plUSD      += a.plUSD;
+      cur.alloc      += a.alloc;
+      cur._costTotal += a.qty * a.cost;
+      cur._thbCostTotal += (a.thbAvgCost ?? 0) * a.qty;
+      cur._thbApprox = cur._thbApprox || !!a.thbApprox;
+      if (!cur._sources.includes(a.source)) cur._sources.push(a.source);
+    }
+    return [...byTicker.values()].map(m => {
+      const cost = m.qty > 0 ? m._costTotal / m.qty : m.cost;
+      const costTotal = m._costTotal;
+      const pctProfit = costTotal > 0 ? (m.plUSD / costTotal) * 100 : 0;
+      const thbAvgCost = m.qty > 0 ? m._thbCostTotal / m.qty : null;
+      const source = m._sources.length > 1 ? 'Multiple' : m._sources[0];
+      return { ...m, cost, costTotal, pctProfit, thbAvgCost, thbApprox: m._thbApprox, source };
+    });
+  }, [portfolio, filteredAssetsRaw]);
+
+  // Totals derive from the un-combined rows so any subtle rounding stays
+  // consistent with the chart and PieChart.
+  const { now: totalNow, cost: totalCost } = useMemo(() => totalsFor(filteredAssetsRaw), [filteredAssetsRaw]);
 
   const totalReturn = totalCost > 0 ? ((totalNow - totalCost) / totalCost) * 100 : 0;
   const totalGain = totalNow - totalCost;
@@ -183,10 +235,10 @@ export default function App() {
                 transactions={portfolio === 'All' ? transactions : transactions.filter(t => t.source === portfolio)}
                 priceMap={priceMap}
               />
-              <PieChart assets={filteredAssets} totalNow={totalNow} portfolio={portfolio} />
+              <PieChart assets={filteredAssetsRaw} totalNow={totalNow} portfolio={portfolio} />
             </div>
 
-            <AssetList assets={filteredAssets} portfolio={portfolio} />
+            <AssetList assets={filteredAssetsCombined} portfolio={portfolio} />
 
             <div className="foot">Prices simulated · Not financial advice · {fmtDateBkk(new Date(), { dateStyle: 'long' })}</div>
           </Fragment>

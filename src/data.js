@@ -12,9 +12,12 @@ export function setFxRate(v) {
 }
 
 export const SOURCES = {
-  'Dime!':   { color: '#6EF5A4', dot: '#3fbe72' },
-  'Webull':  { color: '#3b82f6', dot: '#1d4ed8' },
-  'Binance': { color: '#f0b90b', dot: '#b8860b' },
+  'Dime!':    { color: '#6EF5A4', dot: '#3fbe72' },
+  'Webull':   { color: '#3b82f6', dot: '#1d4ed8' },
+  'Binance':  { color: '#f0b90b', dot: '#b8860b' },
+  // Sentinel for combined same-ticker rows on the "All" view — see
+  // CONTEXT.md → "Combined-ticker view".
+  'Multiple': { color: '#71717a', dot: '#52525b' },
 };
 export const PORTFOLIOS = ['All', 'Dime!', 'Webull', 'Binance'];
 export const PORTFOLIO_TYPES = {
@@ -80,9 +83,18 @@ function groupByOn(assets, keyFn) {
 }
 
 export function categoryDataFor(assets) {
-  const individual = assets
-    .filter(a => (Number(a.holdingUSD) || 0) > 0)
-    .map((a, i) => ({ name: a.ticker, value: Number(a.holdingUSD), color: PALETTE[i % PALETTE.length] }));
+  // Group by ticker (sum holdingUSD across brokerages) so the same ticker
+  // held in multiple brokerages shows as ONE slice, not several with the same
+  // name. The other groupings already aggregate by their own key.
+  const byTicker = new Map();
+  for (const a of assets) {
+    const v = Number(a.holdingUSD) || 0;
+    if (v <= 0) continue;
+    byTicker.set(a.ticker, (byTicker.get(a.ticker) || 0) + v);
+  }
+  const individual = [...byTicker.entries()].map(([name, value], i) =>
+    ({ name, value, color: PALETTE[i % PALETTE.length] })
+  );
   return {
     'By Asset Type':       groupByOn(assets, a => a.type),
     'By Individual Asset': individual,
