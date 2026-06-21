@@ -938,7 +938,12 @@ export default function AddTransactionModal({ onClose, onAdded, transactions = [
                   const amount = parseFloat(qty) || 0;
                   const submitTicker = isCashFlow ? depositCcy : ticker.toUpperCase().trim();
                   const fx = parseFloat(fxRate) || FX_RATE;
-                  const priceUsd = isCashFlow ? 1 : (price === '' ? null : toUsd(parseFloat(price) || 0, priceCcy));
+                  // THB cash stores price as USD-per-THB at the tx-date FX, so its
+                  // cost basis is the baht-value-in-USD you actually deposited
+                  // (not 1:1). USD cash is 1. fx here is the transaction-date rate.
+                  const priceUsd = isCashFlow
+                    ? (depositCcy === 'THB' ? 1 / fx : 1)
+                    : (price === '' ? null : toUsd(parseFloat(price) || 0, priceCcy));
                   const feesUsd  = isCashFlow ? (parseFloat(fees) || 0) : toUsd(parseFloat(fees) || 0, feesCcy);
                   const taxesUsd = isCashFlow ? (parseFloat(taxes) || 0) : toUsd(parseFloat(taxes) || 0, taxesCcy);
                   const submitValueUsd = isCashFlow
