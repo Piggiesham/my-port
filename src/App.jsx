@@ -132,9 +132,6 @@ export default function App() {
     <CurrencyContext.Provider value={ctx}>
       <div className="app">
         <div className="topbar">
-          <div className="brand">
-            <span className="brand-text">my-port</span>
-          </div>
           <div className="nav nav-desktop">
             {navItems.map((t) =>
               <button key={t} className={t === navTab ? 'active' : ''} onClick={() => setNavTab(t)}>{t}</button>
