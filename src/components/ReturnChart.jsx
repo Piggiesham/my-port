@@ -6,7 +6,7 @@ import { supabaseEnabled } from '../lib/supabase.js';
 const RANGE_DAYS = { '1W': 7, '1M': 30, '3M': 90, '6M': 180, '1Y': 365, 'ALL': Infinity };
 const MODE_KEY = 'myport.chart.mode';
 
-export default function ReturnChart({ portfolio = 'All', totalNow, transactions = [], priceMap = {} }) {
+export default function ReturnChart({ portfolio = 'All', totalNow, transactions = [], priceMap = {}, onSummary }) {
   const cur = useContext(CurrencyContext);
   const [range, setRange] = useState('1Y');
   const [hover, setHover] = useState(null);
@@ -143,6 +143,20 @@ export default function ReturnChart({ portfolio = 'All', totalNow, transactions 
   // when we have a real series (Supabase) AND the invested values aren't all 0.
   const hasInvested = !!series && investedArr.some(v => v > 0);
   const isPerf = mode === 'performance';
+
+  // Report the latest-point all-time return up to the page hero so the two
+  // never disagree. Figures are already in display currency (FX-locked invested
+  // in THB mode), and the last point is always "now" — so this is
+  // range-independent. Null when there's no real invested data (mock/empty),
+  // letting the hero fall back to its own cost-basis totals.
+  useEffect(() => {
+    if (!onSummary) return;
+    const i = valueArr.length - 1;
+    const invested = investedArr[i] ?? 0;
+    if (!hasInvested || !(Math.abs(invested) > 1e-9)) { onSummary(null); return; }
+    const value = valueArr[i];
+    onSummary({ value, invested, gain: value - invested, pct: ((value - invested) / invested) * 100 });
+  }, [onSummary, hasInvested, valueArr, investedArr]);
 
   // The primary data series rendered as the solid line.
   const data = isPerf ? perfArr : valueArr;
@@ -332,7 +346,7 @@ export default function ReturnChart({ portfolio = 'All', totalNow, transactions 
       <div className="chart-summary">
         <div className="chart-summary-left">
           <div className="num" style={{ fontSize: 28, fontWeight: 600, letterSpacing: '-0.02em' }}>
-            {fmtMoney(focusVal)}
+            {isPerf ? fmtSignedAmount(dollarChange) : fmtMoney(focusVal)}
           </div>
           <div className="num" style={{ fontSize: 13, marginTop: 6, color: headerUp ? 'var(--green)' : 'var(--red)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
             <span className={headerUp ? 'arrow-up' : 'arrow-down'}></span>

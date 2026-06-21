@@ -422,18 +422,20 @@ export function computeReturnSeries(transactions, priceMap = {}) {
   const positions = new Map(); // ticker -> { qty, cost, lastPrice }
   const series = [];
 
+  // invested = net deposits (contributed capital), accumulated below; the
+  // snapshot only needs portfolio value. Net deposits is the honest return
+  // base — dividends/realized gains count as return, not cost.
+  let netDeposits = 0;
   const snapshot = (useCurrentPrice) => {
     let value = 0;
-    let invested = 0;
     for (const [tk, p] of positions) {
       if (p.qty <= 0) continue;
       const px = useCurrentPrice
         ? (priceMap[tk] ?? p.lastPrice ?? 0)
         : (p.lastPrice ?? priceMap[tk] ?? 0);
       value += p.qty * px;
-      invested += p.qty * (p.cost ?? 0);
     }
-    return { value, invested };
+    return value;
   };
 
   const mutateCash = (ticker, delta) => {
@@ -473,17 +475,19 @@ export function computeReturnSeries(transactions, priceMap = {}) {
     else if (t.action === 'Fee')      mutateCash('USD', -value);
     else if (t.action === 'Tax')      mutateCash('USD', -value);
 
-    const snap = snapshot(false);
-    series.push({ date: new Date(t.date), value: snap.value, invested: snap.invested });
+    if (t.action === 'Deposit')       netDeposits += value;
+    else if (t.action === 'Withdraw') netDeposits -= value;
+
+    series.push({ date: new Date(t.date), value: snapshot(false), invested: netDeposits });
   }
 
   const lastDate = series[series.length - 1].date;
   const now = new Date();
-  const nowSnap = snapshot(true);
+  const nowValue = snapshot(true);
   if (now.getTime() - lastDate.getTime() > 60_000) {
-    series.push({ date: now, value: nowSnap.value, invested: nowSnap.invested });
+    series.push({ date: now, value: nowValue, invested: netDeposits });
   } else {
-    series[series.length - 1] = { date: lastDate, value: nowSnap.value, invested: nowSnap.invested };
+    series[series.length - 1] = { date: lastDate, value: nowValue, invested: netDeposits };
   }
   return series;
 }
@@ -577,6 +581,7 @@ export function computeDailyReturnSeries(transactions, priceHistory, from, to) {
   // Lets the chart show real "conversion-risk" return in THB mode: the gap
   // between value-in-THB-today vs THB-actually-put-in.
   let investedThb = 0;
+  let investedUsd = 0;   // net deposits in USD — the USD-mode return base
 
   const startMs = new Date(toYMD(from) + 'T00:00:00Z').getTime();
   const endMs = new Date(toYMD(to) + 'T00:00:00Z').getTime();
@@ -625,6 +630,7 @@ export function computeDailyReturnSeries(transactions, priceHistory, from, to) {
       // captures the rate the user actually exchanged at. Withdraws subtract.
       if (t.action === 'Deposit' || t.action === 'Withdraw') {
         const sign = t.action === 'Deposit' ? 1 : -1;
+        investedUsd += sign * value;
         if (t.ticker === 'THB') {
           investedThb += sign * shares;
         } else if (t.ticker === 'USD') {
@@ -643,8 +649,7 @@ export function computeDailyReturnSeries(transactions, priceHistory, from, to) {
 
     const dayStr = new Date(dayMs).toISOString().slice(0, 10);
     let value = 0;
-    let invested = 0;
-    for (const [ticker, { qty, cost }] of positions) {
+    for (const [ticker, { qty }] of positions) {
       if (qty <= 0) continue;
       let price;
       if (ticker === 'USD') {
@@ -660,7 +665,6 @@ export function computeDailyReturnSeries(transactions, priceHistory, from, to) {
         if (price == null) price = lastTxPrice.get(ticker) ?? 0;
       }
       value += qty * price;
-      invested += qty * cost;
     }
 
     // Attach the day's USD-per-THB FX so the chart can render historical
@@ -677,7 +681,7 @@ export function computeDailyReturnSeries(transactions, priceHistory, from, to) {
     // THB-per-USD. Invert to match: fxRate = THB per 1 USD.
     fxRate = (fxRate != null && fxRate > 0) ? 1 / fxRate : null;
 
-    series.push({ date: new Date(dayMs), value, invested, investedThb, fxRate });
+    series.push({ date: new Date(dayMs), value, invested: investedUsd, investedThb, fxRate });
   }
   return series;
 }

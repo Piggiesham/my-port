@@ -18,6 +18,7 @@ export default function App() {
   const [transactions, setTransactions] = useState(supabaseEnabled ? [] : MOCK_TRANSACTIONS);
   const [priceMap, setPriceMap] = useState({});
   const [fxRate, setFxRateState] = useState(FX_RATE);
+  const [chartSummary, setChartSummary] = useState(null); // { value, invested, gain, pct } from ReturnChart, display currency
   const bellRef = useRef(null);
   const navDdRef = useRef(null);
 
@@ -47,6 +48,11 @@ export default function App() {
       setFxRateState(rate);  // forces a re-render so values reflect the new rate
     }).catch(err => console.error('[Supabase] fetchFxRate failed', err));
   }, [refreshFromSupabase]);
+
+  // Drop the chart summary when the unit/scope changes so the hero falls back
+  // to its own totals for the one frame before ReturnChart re-reports — avoids
+  // showing the prior currency's invested figure under the new symbol.
+  useEffect(() => { setChartSummary(null); }, [currency, portfolio]);
 
   const ctx = useMemo(() => ({ currency, setCurrency, fxRate }), [currency, fxRate]);
 
@@ -117,11 +123,21 @@ export default function App() {
   // consistent with the chart and PieChart.
   const { now: totalNow, cost: totalCost } = useMemo(() => totalsFor(filteredAssetsRaw), [filteredAssetsRaw]);
 
-  const totalReturn = totalCost > 0 ? ((totalNow - totalCost) / totalCost) * 100 : 0;
-  const totalGain = totalNow - totalCost;
-  const heroValue = fmtCurrency(totalNow, currency, { decimals: 2 });
-  const heroGain = fmtCurrency(Math.abs(totalGain), currency, { decimals: 2 });
+  // All-time return mirrors the ReturnChart summary so the hero never disagrees
+  // with the chart below it — notably in THB mode, where the chart values
+  // invested capital at each deposit's FX (capturing conversion gain) rather
+  // than today's FX × USD cost. Falls back to the USD cost-basis figure when
+  // the chart has no real series (mock / empty state).
+  const heroSym = currency === 'THB' ? '฿' : '$';
+  const totalNowDisplay = currency === 'THB' ? totalNow * fxRate : totalNow;
+  const heroInvested = chartSummary
+    ? chartSummary.invested
+    : (currency === 'THB' ? totalCost * fxRate : totalCost);
+  const totalGain = totalNowDisplay - heroInvested;
+  const totalReturn = heroInvested > 1e-9 ? (totalGain / heroInvested) * 100 : 0;
   const gainUp = totalGain >= 0;
+  const heroValue = fmtCurrency(totalNow, currency, { decimals: 2 });
+  const heroGain = heroSym + Math.abs(totalGain).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   useEffect(() => {
     const onClick = (e) => {
@@ -234,6 +250,7 @@ export default function App() {
                 totalNow={totalNow}
                 transactions={portfolio === 'All' ? transactions : transactions.filter(t => t.source === portfolio)}
                 priceMap={priceMap}
+                onSummary={setChartSummary}
               />
               <PieChart assets={filteredAssetsRaw} totalNow={totalNow} portfolio={portfolio} />
             </div>
