@@ -20,6 +20,20 @@ export default function ReturnChart({ portfolio = 'All', totalNow, transactions 
     }
   });
   const wrapRef = useRef(null);
+  // Measure the plot box so the SVG renders at true pixels (viewBox === size),
+  // avoiding the non-uniform stretch that squashed the line + axis text.
+  const [dims, setDims] = useState({ w: 800, h: 280 });
+
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      const r = el.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) setDims({ w: Math.round(r.width), h: Math.round(r.height) });
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   useEffect(() => { setHover(null); }, [portfolio, range, mode]);
 
@@ -40,9 +54,11 @@ export default function ReturnChart({ portfolio = 'All', totalNow, transactions 
     const days = RANGE_DAYS[range];
     const earliestTxMs = Math.min(...transactions.map(t => new Date(t.date).getTime()));
     const to = new Date();
-    const from = isFinite(days)
-      ? new Date(Math.max(earliestTxMs, Date.now() - days * 86400000))
-      : new Date(earliestTxMs);
+    const from = range === 'YTD'
+      ? new Date(Math.max(earliestTxMs, new Date(new Date().getFullYear(), 0, 1).getTime()))
+      : isFinite(days)
+        ? new Date(Math.max(earliestTxMs, Date.now() - days * 86400000))
+        : new Date(earliestTxMs);
     // Always fetch THB price history so the chart can convert USD values to
     // baht using each day's historical FX, not just today's rate.
     const tickers = [...new Set([...transactions.map(t => t.ticker).filter(Boolean), 'THB'])];
@@ -68,10 +84,15 @@ export default function ReturnChart({ portfolio = 'All', totalNow, transactions 
     if (full.length < 2) return null;
 
     const days = RANGE_DAYS[range];
-    if (!isFinite(days)) return full;
-
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - days);
+    let cutoff;
+    if (range === 'YTD') {
+      cutoff = new Date(new Date().getFullYear(), 0, 1);
+    } else if (!isFinite(days)) {
+      return full;
+    } else {
+      cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - days);
+    }
     const inRange = full.filter(p => p.date >= cutoff);
 
     if (inRange.length === 0) {
@@ -147,8 +168,8 @@ export default function ReturnChart({ portfolio = 'All', totalNow, transactions 
   // The primary data series rendered as the solid line.
   const data = isPerf ? perfArr : valueArr;
 
-  const W = 800, H = 280;
-  const padL = 8, padR = 72, padT = 16, padB = 28;
+  const W = dims.w, H = dims.h;
+  const padL = 8, padR = W < 480 ? 48 : 72, padT = 16, padB = 28;
   const plotW = W - padL - padR;
   const plotH = H - padT - padB;
 
@@ -195,11 +216,17 @@ export default function ReturnChart({ portfolio = 'All', totalNow, transactions 
   //   big number = portfolio value at focus
   //   %          = (value / invested - 1) * 100 at focus — total return ratio
   //   $          = value - invested at focus — total unrealized gain
+  // Period return, excluding deposits/withdrawals made during the range:
+  //   gain  = (value_now − value_start) − net deposits in the period
+  //   basis = capital deployed = value_start + net deposits in the period
+  // For ALL this reduces to total return (value_start ≈ 0). Avoids /0.
   const focusVal = valueArr[focusIdx];
-  const focusInvested = investedArr[focusIdx] ?? 0;
-  const dollarChange = focusVal - focusInvested;
-  const rangePctValid = Math.abs(focusInvested) > 1e-9;
-  const pctChange = rangePctValid ? (dollarChange / focusInvested) * 100 : 0;
+  const startVal = valueArr[0] ?? 0;
+  const depDelta = (investedArr[focusIdx] ?? 0) - (investedArr[0] ?? 0);
+  const dollarChange = (focusVal - startVal) - depDelta;
+  const basis = startVal + depDelta;
+  const rangePctValid = Math.abs(basis) > 1e-9;
+  const pctChange = rangePctValid ? (dollarChange / basis) * 100 : 0;
   const headerUp = dollarChange >= 0;
 
   // Line color = same signal as the headline % (green when total return positive).
@@ -212,7 +239,7 @@ export default function ReturnChart({ portfolio = 'All', totalNow, transactions 
   }, [yMin, yMax]);
 
   const xTicks = useMemo(() => {
-    const n = Math.min(5, data.length);
+    const n = Math.min(W < 480 ? 3 : 5, data.length);
     const ticks = [];
     if (useTimeX) {
       for (let i = 0; i < n; i++) {
@@ -227,7 +254,7 @@ export default function ReturnChart({ portfolio = 'All', totalNow, transactions 
       }
     }
     return ticks;
-  }, [data.length, useTimeX, tStart, tEnd, tSpan, dates, plotW, x, padL]);
+  }, [W, data.length, useTimeX, tStart, tEnd, tSpan, dates, plotW, x, padL]);
 
   const fmtDate = (d) => {
     if (range === '1W') return d.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'Asia/Bangkok' });
@@ -347,7 +374,7 @@ export default function ReturnChart({ portfolio = 'All', totalNow, transactions 
       </div>
 
       <div className="chart-wrap" ref={wrapRef}>
-        <svg className="chart-svg" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
+        <svg className="chart-svg" viewBox={`0 0 ${W} ${H}`} onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
           <defs>
             <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor={lineColor} stopOpacity="0.22" />

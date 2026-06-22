@@ -108,7 +108,9 @@
   .chart-summary { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 12px; gap: 16px; min-height: 64px; }
   .chart-summary-left { min-width: 0; flex: 1; }
   .chart-summary-right { text-align: right; white-space: nowrap; flex-shrink: 0; margin-left: 16px; min-width: 140px; }
-  .chart-wrap { position: relative; height: 280px; }
+  /* Responsive plot: scales with card width at 3.2:1, floored at 220px so it
+     never collapses on narrow/mobile widths. */
+  .chart-wrap { position: relative; aspect-ratio: 3.2 / 1; min-height: 220px; }
   .chart-svg { width: 100%; height: 100%; display: block; overflow: visible; }
   .grid-line { stroke: var(--border); stroke-width: 1; }
   .axis-label { fill: var(--text-faint); font-size: 11px; font-family: 'JetBrains Mono', monospace; }
@@ -121,17 +123,24 @@
   .tooltip .t-val { font-family: 'JetBrains Mono', monospace; font-size: 14px; font-weight: 600; }
   .tooltip .t-delta { font-family: 'JetBrains Mono', monospace; font-size: 11px; margin-top: 2px; }
 
-  /* Pie + Allocation card: fixed height, scrollable legend */
-  .pie-card { display: flex; flex-direction: column; height: 100%; min-height: 360px; }
+  /* Pie + Allocation card. The legend is capped at ~4 rows (scrolls past),
+     and the donut is a fixed 240px, so the card height is constant regardless
+     of which category/sorting is selected — switching never resizes the box. */
+  .pie-card { display: flex; flex-direction: column; }
   .pie-card .card-head { margin-bottom: 16px; }
-  .pie-body { display: grid; grid-template-columns: 180px 1fr; gap: 24px; align-items: start; flex: 1; min-height: 0; }
-  .pie-svg-wrap { display: flex; align-items: center; justify-content: center; }
-  .pie-svg { width: 180px; height: 180px; }
+  .pie-body { display: flex; flex-direction: column; gap: 18px; flex: 1; min-height: 0; }
+  .pie-svg-wrap { display: flex; align-items: center; justify-content: center; flex: none; }
+  /* Donut is a fixed 240px square (shrinks only on very narrow widths) so
+     switching the category/sorting never resizes it. The legend below takes
+     the remaining height and scrolls, keeping the card box constant. */
+  .pie-svg { width: 100%; max-width: 240px; height: auto; aspect-ratio: 1 / 1; }
   .pie-center { fill: var(--text); font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 600; }
   .pie-center-sub { fill: var(--text-faint); font-family: 'JetBrains Mono', monospace; font-size: 10px; }
   .pie-arc { transition: opacity 0.18s, transform 0.18s; transform-origin: 90px 90px; cursor: pointer; }
   .pie-arc.dim { opacity: 0.35; }
-  .legend-wrap { max-height: 220px; overflow-y: auto; padding-right: 4px; }
+  /* Fixed height = ~4 rows: fewer rows leave empty space, more rows scroll, so
+     the card box never changes size when you switch the category/sorting. */
+  .legend-wrap { width: 100%; height: 132px; overflow-y: auto; padding-right: 4px; }
   .legend-wrap::-webkit-scrollbar { width: 6px; }
   .legend-wrap::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 3px; }
   .legend { display: flex; flex-direction: column; gap: 6px; }
@@ -375,10 +384,8 @@
 
     .chart-summary { flex-wrap: wrap; min-height: 0; }
     .chart-summary-right { margin-left: 0; min-width: 0; }
-    .chart-wrap { height: 220px; }
 
-    .pie-body { grid-template-columns: 1fr; justify-items: center; gap: 16px; }
-    .legend-wrap { max-height: 180px; width: 100%; }
+    .pie-body { gap: 16px; }
 
     /* Asset list — stack as cards on mobile */
     .list-controls { padding: 16px; flex-direction: column; align-items: stretch; }

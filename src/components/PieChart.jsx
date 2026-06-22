@@ -62,14 +62,14 @@ export default function PieChart({ assets = ASSETS, totalNow = 0, portfolio = 'A
   })();
 
   const focused = hoverIdx !== null ? arcs[hoverIdx] : null;
-  const totalLabel = fmtCurrency(totalNow, cur.currency, { decimals: 0, compact: true });
+  const totalLabel = fmtCurrency(totalNow, cur.currency, { decimals: 2, compact: true });
 
   return (
     <div className="card pie-card">
       <div className="card-head">
         <div>
           <div className="card-title">Allocation</div>
-          <div className="card-sub">{focused ? focused.name : `${data.length} ${data.length === 1 ? 'category' : 'categories'}`}</div>
+          <div className="card-sub">{data.length} {data.length === 1 ? 'category' : 'categories'}</div>
         </div>
         <div className="dropdown" ref={ddRef}>
           <button className={`dropdown-btn${open ? ' open' : ''}`} onClick={() => setOpen(o => !o)}>
@@ -108,10 +108,20 @@ export default function PieChart({ assets = ASSETS, totalNow = 0, portfolio = 'A
                   onMouseLeave={() => setHoverIdx(null)}
                 />
               ))}
-              <text className="pie-center-sub" x="90" y="84" textAnchor="middle">{focused ? 'Share' : 'Total'}</text>
-              <text className="pie-center" x="90" y="104" textAnchor="middle">
-                {focused ? `${focused.pct.toFixed(1)}%` : totalLabel}
-              </text>
+              {focused ? (
+                <>
+                  <text className="pie-center-sub" x="90" y="74" textAnchor="middle">{focused.name}</text>
+                  <text className="pie-center" x="90" y="98" textAnchor="middle">
+                    {fmtCurrency(focused.value, cur.currency, { decimals: 2, compact: true })}
+                  </text>
+                  <text className="pie-center-sub" x="90" y="116" textAnchor="middle">{focused.pct.toFixed(2)}%</text>
+                </>
+              ) : (
+                <>
+                  <text className="pie-center-sub" x="90" y="84" textAnchor="middle">Total</text>
+                  <text className="pie-center" x="90" y="104" textAnchor="middle">{totalLabel}</text>
+                </>
+              )}
             </svg>
           )}
         </div>

@@ -124,6 +124,7 @@ export const RANGES = {
   '1M':  { points: 30,  label: 'Past 30 days' },
   '3M':  { points: 60,  label: 'Past 3 months' },
   '6M':  { points: 90,  label: 'Past 6 months' },
+  'YTD': { points: 100, label: 'Year to date' },
   '1Y':  { points: 120, label: 'Past 12 months' },
   'ALL': { points: 180, label: 'All time' },
 };
