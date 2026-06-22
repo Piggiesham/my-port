@@ -79,6 +79,10 @@
 
   /* Grid */
   .grid { display: grid; grid-template-columns: 1.55fr 1fr; gap: 20px; margin-bottom: 24px; align-items: stretch; }
+  /* Let grid items shrink to the track instead of their content's min-width —
+     otherwise a wide child (e.g. the range-button row) blows the column out
+     past the viewport, making the cards wider than the full-width asset list. */
+  .grid > * { min-width: 0; }
   .card { background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 24px; }
   .card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; gap: 12px; }
   .card-head > div:first-child { min-width: 0; }
@@ -384,6 +388,11 @@
 
     .chart-summary { flex-wrap: wrap; min-height: 0; }
     .chart-summary-right { margin-left: 0; min-width: 0; }
+    /* Range buttons wrap instead of forcing the card wider than the viewport. */
+    .ranges { flex-wrap: wrap; }
+    /* aspect-ratio + min-height makes iOS Safari size the WIDTH from the ratio
+       (220*3.2=704px), overflowing the card. Use a plain fixed height on mobile. */
+    .chart-wrap { aspect-ratio: auto; height: 220px; }
 
     .pie-body { gap: 16px; }
     /* Donut fills the card width on mobile, like the asset-list rows. */
@@ -396,6 +405,7 @@
     .row { grid-template-columns: 1fr; gap: 10px; padding: 16px; }
     .row .cell-r { text-align: left; display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
     .row .cell-r::before { content: attr(data-label); color: var(--text-faint); font-size: 12px; font-family: 'Inter', sans-serif; font-weight: 400; }
+    .row .price-main { display: inline; }
     .row .price-sub, .row .pct-sub { display: inline; margin-top: 0; margin-left: 4px; font-size: 11px; }
     .row .pct { justify-content: flex-end; }
 
