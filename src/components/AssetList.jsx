@@ -1,5 +1,6 @@
-import { useState, useMemo, useRef, useEffect, useContext } from 'react';
-import { CurrencyContext, ASSETS, SOURCES, fmtCurrency, fmtCurrencyCode } from '../data.js';
+import { useState, useMemo, useRef, useContext } from 'react';
+import { CurrencyContext, ASSETS, SOURCES, FX_RATE, fmtCurrency, fmtCurrencyCode, fmt2 } from '../data.js';
+import { useClickOutside } from '../lib/useClickOutside.js';
 
 const SORT_OPTIONS = [
   { key: 'holdingUSD', label: 'Holding Value' },
@@ -13,18 +14,12 @@ const SORT_OPTIONS = [
 
 export default function AssetList({ assets = ASSETS, portfolio = 'All' }) {
   const cur = useContext(CurrencyContext);
-  const fx = cur.fxRate || 32.27;
+  const fx = cur.fxRate || FX_RATE;
   const [sortKey, setSortKey] = useState('holdingUSD');
   const [sortOpen, setSortOpen] = useState(false);
   const sortRef = useRef(null);
 
-  useEffect(() => {
-    const onClick = (e) => {
-      if (sortRef.current && !sortRef.current.contains(e.target)) setSortOpen(false);
-    };
-    document.addEventListener('mousedown', onClick);
-    return () => document.removeEventListener('mousedown', onClick);
-  }, []);
+  useClickOutside(sortRef, () => setSortOpen(false));
 
   // Avg Cost values for sorting: USD = a.cost (per-share); THB = a.thbAvgCost.
   // Cash rows render "—" so they're sorted to the bottom (treated as -Infinity).
@@ -48,14 +43,13 @@ export default function AssetList({ assets = ASSETS, portfolio = 'All' }) {
 
   const fmtPrice = (a) => {
     if (a.isCash) return '—';
-    const v = a.price * (cur.currency === 'THB' ? fx : 1);
-    return v >= 1000 ? v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : v.toFixed(2);
+    return fmt2(a.price * (cur.currency === 'THB' ? fx : 1));
   };
 
   const altCurrency = cur.currency === 'USD' ? 'THB' : 'USD';
   const fmtAltHolding = (usd) => {
     const v = altCurrency === 'THB' ? usd * fx : usd;
-    return v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ' + altCurrency;
+    return fmt2(v) + ' ' + altCurrency;
   };
 
   // Avg Cost cell: per-share in USD (a.cost, today) or THB (a.thbAvgCost,
@@ -67,12 +61,11 @@ export default function AssetList({ assets = ASSETS, portfolio = 'All' }) {
       const v = Number(a.thbAvgCost) || 0;
       if (v <= 0) return { main: '—', sub: '', approx: false };
       const approx = !!a.thbApprox;
-      const txt = v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-      return { main: (approx ? '~' : '') + txt, sub: 'THB', approx };
+      return { main: (approx ? '~' : '') + fmt2(v), sub: 'THB', approx };
     }
     const v = Number(a.cost) || 0;
     if (v <= 0) return { main: '—', sub: '', approx: false };
-    return { main: v >= 1000 ? v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : v.toFixed(2), sub: 'USD', approx: false };
+    return { main: fmt2(v), sub: 'USD', approx: false };
   };
 
   return (
@@ -161,7 +154,7 @@ export default function AssetList({ assets = ASSETS, portfolio = 'All' }) {
 
             <div className="cell-r" data-label="Holding">
               <div>
-                <div className="price-main">{a.holdingUSD === 0 ? '0.00' : (cur.currency === 'THB' ? (a.holdingUSD * fx) : a.holdingUSD).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+                <div className="price-main">{a.holdingUSD === 0 ? '0.00' : fmt2(cur.currency === 'THB' ? a.holdingUSD * fx : a.holdingUSD)}</div>
                 <div className="price-sub">≈ {fmtAltHolding(a.holdingUSD)}</div>
               </div>
             </div>

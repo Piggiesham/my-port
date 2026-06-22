@@ -1,5 +1,6 @@
 import { useState, useMemo, useRef, useEffect, useContext } from 'react';
 import { CurrencyContext, ASSETS, CATEGORIES, categoryDataFor, fmtCurrency } from '../data.js';
+import { useClickOutside } from '../lib/useClickOutside.js';
 
 export default function PieChart({ assets = ASSETS, totalNow = 0, portfolio = 'All' }) {
   const cur = useContext(CurrencyContext);
@@ -8,13 +9,7 @@ export default function PieChart({ assets = ASSETS, totalNow = 0, portfolio = 'A
   const [hoverIdx, setHoverIdx] = useState(null);
   const ddRef = useRef(null);
 
-  useEffect(() => {
-    const onClick = (e) => {
-      if (ddRef.current && !ddRef.current.contains(e.target)) setOpen(false);
-    };
-    document.addEventListener('mousedown', onClick);
-    return () => document.removeEventListener('mousedown', onClick);
-  }, []);
+  useClickOutside(ddRef, () => setOpen(false));
 
   useEffect(() => { setHoverIdx(null); }, [category, portfolio]);
 
@@ -137,7 +132,7 @@ export default function PieChart({ assets = ASSETS, totalNow = 0, portfolio = 'A
               >
                 <span className="swatch" style={{ background: a.color }}></span>
                 <span className="name">{a.name}</span>
-                <span className="pct">{a.pct.toFixed(1)}%</span>
+                <span className="pct">{a.pct.toFixed(2)}%</span>
               </div>
             ))}
           </div>

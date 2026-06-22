@@ -1,7 +1,8 @@
 import { useState, useMemo, useContext, useEffect, useRef } from 'react';
 import { CurrencyContext, SOURCES, FX_RATE, fmtCurrencySym, fmtCurrencyCode, fmtDateTimeBkk, utcIsoToBkkParts, bkkPartsToUtcIso } from '../data.js';
 import { deleteTransaction, updateTransaction, fetchHistoricalPrice } from '../lib/api.js';
-import { CurrencySuffix, EditDateField } from './AddTransactionModal.jsx';
+import { CurrencySuffix } from './CurrencySuffix.jsx';
+import { EditDateField } from './DateField.jsx';
 
 // ============================================================================
 // TransactionDetailModal — read-only view with Edit & Delete actions.

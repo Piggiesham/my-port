@@ -1,464 +1,11 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
-import { SOURCES, PORTFOLIO_TYPES, FX_RATE, fmtCurrencySym, bkkNowParts, bkkPartsToUtcIso } from '../data.js';
-import { addTransaction, fetchAssetCatalog, createAsset, searchYahooSymbols, fetchHistoricalPrice, computeCashBalance, computeSharesHeld } from '../lib/api.js';
+import { SOURCES, PORTFOLIO_TYPES, FX_RATE, fmtCurrencySym, fmt2, bkkNowParts, bkkPartsToUtcIso } from '../data.js';
+import { addTransaction, fetchAssetCatalog, fetchHistoricalPrice, computeCashBalance, computeSharesHeld } from '../lib/api.js';
 import { supabaseEnabled } from '../lib/supabase.js';
-
-// Asset-type filter for the typeahead.
-const ASSET_TYPE_FILTER = {
-  Security: ['Stock', 'ETF', 'Commodity'],
-  Bond:     ['Bond'],
-  Crypto:   ['Crypto'],
-  Cash:     ['Cash'],
-};
-
-const YAHOO_TYPE_TO_ASSET = {
-  EQUITY: 'Stock',
-  ETF: 'ETF',
-  MUTUALFUND: 'ETF',
-  CRYPTOCURRENCY: 'Crypto',
-  CURRENCY: 'Cash',
-};
-
-// ---- Shared sub-components (also used by TransactionDetailModal) ------------
-
-export function CurrencySuffix({ value, onChange }) {
-  const [open, setOpen] = useState(false);
-  const wrapRef = useRef(null);
-  useEffect(() => {
-    const onClick = (e) => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false); };
-    document.addEventListener('mousedown', onClick);
-    return () => document.removeEventListener('mousedown', onClick);
-  }, []);
-  return (
-    <span
-      className="field-suffix"
-      ref={wrapRef}
-      style={{ userSelect: 'none' }}
-      onClick={() => setOpen(o => !o)}
-    >
-      {value}
-      <svg width="10" height="10" viewBox="0 0 10 10" fill="none" style={{ transition: 'transform 0.18s', transform: open ? 'rotate(180deg)' : 'none' }}>
-        <path d="M2 4l3 3 3-3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-      </svg>
-      {open && (
-        <div className="dropdown-menu" style={{ minWidth: 96, right: 0, top: 'calc(100% + 6px)' }}>
-          {['USD', 'THB'].map(c => (
-            <button
-              key={c}
-              type="button"
-              className={`dropdown-item${c === value ? ' selected' : ''}`}
-              onClick={(e) => { e.stopPropagation(); onChange(c); setOpen(false); }}
-            >
-              <span>{c}</span>
-              {c === value && <span style={{ color: 'var(--accent)' }}>✓</span>}
-            </button>
-          ))}
-        </div>
-      )}
-    </span>
-  );
-}
-
-// ---- DatePopover internals --------------------------------------------------
-
-const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-const WEEK = ['Mo','Tu','We','Th','Fr','Sa','Su'];
-
-function pad(n) { return String(n).padStart(2, '0'); }
-function isoDate(d) { return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; }
-function parseIso(s) {
-  if (!s) return null;
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
-  if (!m) return null;
-  return new Date(Number(m[1]), Number(m[2])-1, Number(m[3]));
-}
-
-const chevBtn = {
-  width: 32, height: 32, borderRadius: 8, background: 'var(--panel)', border: '1px solid var(--border-strong)',
-  display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-dim)', cursor: 'pointer',
-};
-const selectBtn = {
-  width: '100%', height: 32, padding: '0 12px', borderRadius: 8, background: 'var(--panel)', border: '1px solid var(--border-strong)',
-  display: 'flex', alignItems: 'center', justifyContent: 'space-between', color: 'var(--text)', fontSize: 13, fontWeight: 600, cursor: 'pointer',
-};
-const menuStyle = {
-  position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0, maxHeight: 200, overflowY: 'auto',
-  background: 'var(--panel-2)', border: '1px solid var(--border-strong)', borderRadius: 8, padding: 4, zIndex: 70,
-  boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
-};
-
-function DatePopover({ value, onPick, onClose, anchorRef }) {
-  const popRef = useRef(null);
-  const initial = parseIso(value) || new Date();
-  const [viewYear, setViewYear] = useState(initial.getFullYear());
-  const [viewMonth, setViewMonth] = useState(initial.getMonth());
-  const [monthOpen, setMonthOpen] = useState(false);
-  const [yearOpen, setYearOpen] = useState(false);
-
-  useEffect(() => {
-    const onClick = (e) => {
-      if (popRef.current && !popRef.current.contains(e.target) && (!anchorRef?.current || !anchorRef.current.contains(e.target))) {
-        onClose();
-      }
-    };
-    document.addEventListener('mousedown', onClick);
-    return () => document.removeEventListener('mousedown', onClick);
-  }, [onClose, anchorRef]);
-
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
-  const firstOfMonth = new Date(viewYear, viewMonth, 1);
-  const startWeekday = (firstOfMonth.getDay() + 6) % 7;
-  const gridStart = new Date(viewYear, viewMonth, 1 - startWeekday);
-  const cells = Array.from({ length: 42 }, (_, i) => {
-    const d = new Date(gridStart.getFullYear(), gridStart.getMonth(), gridStart.getDate() + i);
-    return d;
-  });
-  const todayIso = isoDate(new Date());
-  const selectedIso = value;
-
-  const years = (() => {
-    const cy = new Date().getFullYear();
-    const arr = [];
-    for (let y = cy + 1; y >= cy - 30; y--) arr.push(y);
-    return arr;
-  })();
-
-  const stepMonth = (delta) => {
-    let m = viewMonth + delta, y = viewYear;
-    if (m < 0) { m = 11; y--; }
-    else if (m > 11) { m = 0; y++; }
-    setViewMonth(m); setViewYear(y);
-  };
-
-  return (
-    <div
-      ref={popRef}
-      style={{
-        position: 'absolute', top: 'calc(100% + 8px)', right: 0, zIndex: 60,
-        background: 'var(--panel-2)', border: '1px solid var(--border-strong)', borderRadius: 16,
-        padding: 14, width: 320, boxShadow: '0 18px 40px rgba(0,0,0,0.5)',
-      }}
-      onMouseDown={(e) => e.stopPropagation()}
-    >
-      <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-        <button type="button" onClick={() => stepMonth(-1)} style={chevBtn} aria-label="Previous month">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M9 3l-4 4 4 4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>
-        </button>
-        <div style={{ position: 'relative', flex: 1 }}>
-          <button type="button" onClick={() => { setMonthOpen(o => !o); setYearOpen(false); }} style={selectBtn}>
-            <span>{MONTHS[viewMonth]}</span>
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 5l3 3 3-3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
-          </button>
-          {monthOpen && (
-            <div style={menuStyle}>
-              {MONTHS.map((m, i) => (
-                <button key={m} type="button" className="dropdown-item" onClick={() => { setViewMonth(i); setMonthOpen(false); }} style={{ display: 'block', width: '100%', textAlign: 'left' }}>
-                  {m}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-        <div style={{ position: 'relative', width: 96 }}>
-          <button type="button" onClick={() => { setYearOpen(o => !o); setMonthOpen(false); }} style={selectBtn}>
-            <span>{viewYear}</span>
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 5l3 3 3-3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
-          </button>
-          {yearOpen && (
-            <div style={menuStyle}>
-              {years.map((y) => (
-                <button key={y} type="button" className="dropdown-item" onClick={() => { setViewYear(y); setYearOpen(false); }} style={{ display: 'block', width: '100%', textAlign: 'left' }}>
-                  {y}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-        <button type="button" onClick={() => stepMonth(1)} style={chevBtn} aria-label="Next month">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5 3l4 4-4 4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>
-        </button>
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 4, fontSize: 12, color: 'var(--text-faint)', marginBottom: 6 }}>
-        {WEEK.map(w => <div key={w} style={{ textAlign: 'center', padding: '4px 0', fontWeight: 600 }}>{w}</div>)}
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 4 }}>
-        {cells.map((d, i) => {
-          const inMonth = d.getMonth() === viewMonth;
-          const iso = isoDate(d);
-          const isSelected = iso === selectedIso;
-          const isToday = iso === todayIso;
-          return (
-            <button
-              key={i}
-              type="button"
-              onClick={() => { onPick(iso); onClose(); }}
-              style={{
-                aspectRatio: '1 / 1',
-                borderRadius: '50%',
-                fontWeight: isSelected || isToday ? 700 : 500,
-                fontSize: 13,
-                background: isSelected ? 'var(--accent, #6366f1)' : 'transparent',
-                color: isSelected ? 'white' : (inMonth ? 'var(--text)' : 'var(--text-faint)'),
-                border: isToday && !isSelected ? '1px solid var(--border-strong)' : '1px solid transparent',
-                cursor: 'pointer',
-                transition: 'background 0.12s',
-              }}
-              onMouseEnter={(e) => { if (!isSelected) e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; }}
-              onMouseLeave={(e) => { if (!isSelected) e.currentTarget.style.background = 'transparent'; }}
-            >
-              {d.getDate()}
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-export function EditDateField({ value, onChange }) {
-  const [open, setOpen] = useState(false);
-  const iconRef = useRef(null);
-  const [y, m, d] = (value || '').split('-');
-  const display = (y && m && d) ? `${d}/${m}/${y}` : '';
-  return (
-    <div className="field-with-icon" style={{ position: 'relative' }}>
-      <input
-        className="field-input"
-        value={display}
-        onChange={e => {
-          const t = e.target.value.trim();
-          if (/^\d{2}\/\d{2}\/\d{4}$/.test(t)) {
-            const [dd, mm, yyyy] = t.split('/');
-            onChange(`${yyyy}-${mm}-${dd}`);
-          }
-        }}
-        placeholder="DD/MM/YYYY"
-      />
-      <button
-        type="button"
-        ref={iconRef}
-        onClick={() => setOpen(o => !o)}
-        aria-label="Open calendar"
-        style={{ position: 'absolute', top: '50%', right: 12, transform: 'translateY(-50%)', background: 'transparent', border: 'none', color: 'var(--text-faint)', cursor: 'pointer', padding: 4, display: 'inline-flex' }}
-      >
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-          <rect x="2" y="3" width="12" height="11" rx="1.5" stroke="currentColor" strokeWidth="1.4"/>
-          <path d="M2 6h12M5 2v3M11 2v3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
-        </svg>
-      </button>
-      {open && (
-        <DatePopover
-          value={value}
-          anchorRef={iconRef}
-          onPick={(iso) => onChange(iso)}
-          onClose={() => setOpen(false)}
-        />
-      )}
-    </div>
-  );
-}
-
-// ---- AssetSearchInput -------------------------------------------------------
-
-function AssetSearchInput({ assetType, catalog, value, onChange, onAssetCreated, placeholder }) {
-  const [query, setQuery] = useState(value || '');
-  const [open, setOpen] = useState(false);
-  const [creating, setCreating] = useState(false);
-  const [newName, setNewName] = useState('');
-  const [createBusy, setCreateBusy] = useState(false);
-  const [createErr, setCreateErr] = useState(null);
-  const [remote, setRemote] = useState([]);
-  const [remoteBusy, setRemoteBusy] = useState(false);
-  const [addingRemote, setAddingRemote] = useState(null);
-  const wrapRef = useRef(null);
-
-  useEffect(() => { setQuery(value || ''); }, [value]);
-
-  useEffect(() => {
-    const onClick = (e) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target)) {
-        setOpen(false);
-        setCreating(false);
-      }
-    };
-    document.addEventListener('mousedown', onClick);
-    return () => document.removeEventListener('mousedown', onClick);
-  }, []);
-
-  const allowedTypes = useMemo(() => ASSET_TYPE_FILTER[assetType] || [], [assetType]);
-  const matches = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return catalog
-      .filter(a => allowedTypes.length === 0 || allowedTypes.includes(a.type))
-      .filter(a => !q || a.ticker.toLowerCase().includes(q) || (a.name || '').toLowerCase().includes(q))
-      .slice(0, 20);
-  }, [catalog, query, allowedTypes]);
-
-  useEffect(() => {
-    const q = query.trim();
-    if (q.length < 1) { setRemote([]); return; }
-    const knownTickers = new Set(catalog.map(a => a.ticker.toUpperCase()));
-    if (knownTickers.has(q.toUpperCase()) && matches.some(a => a.ticker.toUpperCase() === q.toUpperCase())) {
-      setRemote([]);
-      return;
-    }
-    let cancelled = false;
-    setRemoteBusy(true);
-    const t = setTimeout(async () => {
-      try {
-        const results = await searchYahooSymbols(q);
-        if (cancelled) return;
-        const filtered = results
-          .map(r => ({ ...r, mappedType: YAHOO_TYPE_TO_ASSET[r.type] }))
-          .filter(r => r.mappedType)
-          .filter(r => allowedTypes.length === 0 || allowedTypes.includes(r.mappedType))
-          .filter(r => !knownTickers.has(r.symbol.toUpperCase()))
-          .slice(0, 8);
-        setRemote(filtered);
-      } finally {
-        if (!cancelled) setRemoteBusy(false);
-      }
-    }, 250);
-    return () => { cancelled = true; clearTimeout(t); };
-  }, [query, catalog, matches, allowedTypes]);
-
-  const exactMatch = matches.find(a => a.ticker.toUpperCase() === query.trim().toUpperCase());
-  const showCreateRow = query.trim().length > 0 && !exactMatch && !remoteBusy && allowedTypes.length > 0;
-
-  const pick = (asset) => {
-    setQuery(asset.ticker);
-    onChange(asset.ticker);
-    setOpen(false);
-    setCreating(false);
-  };
-
-  const startCreate = () => {
-    setCreating(true);
-    setNewName('');
-    setCreateErr(null);
-  };
-
-  const pickRemote = async (r) => {
-    setAddingRemote(r.symbol);
-    try {
-      const created = await createAsset({ ticker: r.symbol, name: r.name, type: r.mappedType });
-      onAssetCreated?.(created);
-      pick({ ticker: created.ticker, name: created.name, type: created.type });
-    } catch (err) {
-      console.error('[asset] create from yahoo failed', err);
-    } finally {
-      setAddingRemote(null);
-    }
-  };
-
-  const submitCreate = async () => {
-    if (!newName.trim()) { setCreateErr('Name is required'); return; }
-    setCreateBusy(true);
-    setCreateErr(null);
-    try {
-      const newType = allowedTypes[0];
-      const created = await createAsset({
-        ticker: query.trim().toUpperCase(),
-        name: newName.trim(),
-        type: newType,
-      });
-      onAssetCreated?.(created);
-      pick({ ticker: created.ticker, name: created.name, type: created.type });
-    } catch (err) {
-      setCreateErr(err.message || 'Could not create asset');
-    } finally {
-      setCreateBusy(false);
-    }
-  };
-
-  return (
-    <div style={{ position: 'relative' }} ref={wrapRef}>
-      <div className="field-with-icon">
-        <svg className="lead-icon" width="16" height="16" viewBox="0 0 16 16" fill="none">
-          <circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.5"/>
-          <path d="M11 11l3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-        </svg>
-        <input
-          className="field-input"
-          placeholder={placeholder}
-          value={query}
-          onFocus={() => setOpen(true)}
-          onChange={e => {
-            const v = e.target.value;
-            setQuery(v);
-            onChange(v.toUpperCase());
-            setOpen(true);
-            setCreating(false);
-          }}
-        />
-      </div>
-
-      {open && (matches.length > 0 || remote.length > 0 || remoteBusy || showCreateRow) && (
-        <div className="dropdown-menu" style={{ left: 0, right: 0, minWidth: 0, maxHeight: 320, overflowY: 'auto' }}>
-          {matches.map(a => (
-            <button key={a.ticker} type="button" className="dropdown-item" onClick={() => pick(a)}
-              style={{ alignItems: 'center', justifyContent: 'flex-start', gap: 10 }}>
-              <span className="logo" style={{ flexShrink: 0, width: 26, height: 26, borderRadius: 6, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, background: a.logo_bg || '#333', color: a.logo_dark ? '#0a0a0b' : 'white' }}>
-                {a.logo_text || a.ticker[0]}
-              </span>
-              <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2, minWidth: 0 }}>
-                <span style={{ fontWeight: 600 }}>{a.ticker}</span>
-                <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>{a.name} · {a.type}</span>
-              </span>
-            </button>
-          ))}
-
-          {(remote.length > 0 || remoteBusy) && (
-            <div style={{ padding: '6px 12px', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text-faint)', borderTop: matches.length > 0 ? '1px solid var(--border, #222)' : 'none' }}>
-              Yahoo Finance {remoteBusy && '· searching…'}
-            </div>
-          )}
-          {remote.map(r => (
-            <button key={`remote-${r.symbol}`} type="button" className="dropdown-item" onClick={() => pickRemote(r)}
-              disabled={addingRemote === r.symbol}
-              style={{ alignItems: 'center', justifyContent: 'flex-start', gap: 10, opacity: addingRemote === r.symbol ? 0.5 : 1 }}>
-              <span className="logo" style={{ flexShrink: 0, width: 26, height: 26, borderRadius: 6, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, background: '#333', color: 'white' }}>
-                {r.symbol[0]}
-              </span>
-              <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2, flex: 1, minWidth: 0 }}>
-                <span style={{ fontWeight: 600 }}>{r.symbol}</span>
-                <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>{r.name} · {r.mappedType}{r.exchange ? ` · ${r.exchange}` : ''}</span>
-              </span>
-              <span style={{ fontSize: 11, color: 'var(--accent)' }}>{addingRemote === r.symbol ? 'Adding…' : '+ Add'}</span>
-            </button>
-          ))}
-
-          {showCreateRow && !creating && (
-            <button type="button" className="dropdown-item" onClick={startCreate} style={{ color: 'var(--accent)' }}>
-              <span>+ Add custom ticker "{query.trim().toUpperCase()}" ({assetType})</span>
-            </button>
-          )}
-
-          {creating && (
-            <div style={{ padding: '10px 12px', borderTop: '1px solid var(--border, #222)', display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>New {assetType} · ticker {query.trim().toUpperCase()}</div>
-              <input className="field-input" placeholder="Asset name (e.g. Apple Inc)" value={newName} onChange={e => setNewName(e.target.value)} autoFocus />
-              {createErr && <div style={{ fontSize: 12, color: 'var(--red)' }}>{createErr}</div>}
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button type="button" className="btn-primary" onClick={submitCreate} disabled={createBusy} style={{ flex: 1, opacity: createBusy ? 0.5 : 1 }}>
-                  {createBusy ? 'Saving…' : 'Create & select'}
-                </button>
-                <button type="button" className="btn-secondary" onClick={() => setCreating(false)} disabled={createBusy}>Cancel</button>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
+import { useClickOutside } from '../lib/useClickOutside.js';
+import { CurrencySuffix } from './CurrencySuffix.jsx';
+import { EditDateField } from './DateField.jsx';
+import { AssetSearchInput } from './AssetSearchInput.jsx';
 
 // ============================================================================
 // AddTransactionModal
@@ -485,11 +32,6 @@ export default function AddTransactionModal({ onClose, onAdded, transactions = [
   const bkkNow = bkkNowParts();
   const todayIso = bkkNow.date;
   const [dateIso, setDateIso] = useState(todayIso);
-  const [dateText, setDateText] = useState(() => {
-    const [y, m, d] = todayIso.split('-');
-    return `${d}/${m}/${y}`;
-  });
-  const [datePopOpen, setDatePopOpen] = useState(false);
   const [price, setPrice] = useState('');
   const [priceAutoFilled, setPriceAutoFilled] = useState(false);
   const [priceUserEdited, setPriceUserEdited] = useState(false);
@@ -503,19 +45,6 @@ export default function AddTransactionModal({ onClose, onAdded, transactions = [
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
   const txTypeRef = useRef(null);
-  const dateIconRef = useRef(null);
-
-  useEffect(() => {
-    const t = dateText.trim();
-    let iso = null;
-    if (/^\d{2}\/\d{2}\/\d{4}$/.test(t)) {
-      const [dd, mm, yyyy] = t.split('/');
-      iso = `${yyyy}-${mm}-${dd}`;
-    } else if (/^\d{4}-\d{2}-\d{2}$/.test(t)) {
-      iso = t;
-    }
-    if (iso && iso !== dateIso) setDateIso(iso);
-  }, [dateText]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Cash deposits default to 00:01 (first minute of the day) so they always
   // sort before same-day Buys in the cash-trajectory check. Any other type
@@ -560,13 +89,7 @@ export default function AddTransactionModal({ onClose, onAdded, transactions = [
     return () => { cancelled = true; clearTimeout(timer); };
   }, [dateIso]);
 
-  useEffect(() => {
-    const onClick = (e) => {
-      if (txTypeRef.current && !txTypeRef.current.contains(e.target)) setTxTypeOpen(false);
-    };
-    document.addEventListener('mousedown', onClick);
-    return () => document.removeEventListener('mousedown', onClick);
-  }, []);
+  useClickOutside(txTypeRef, () => setTxTypeOpen(false));
 
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onClose(); };
@@ -717,10 +240,10 @@ export default function AddTransactionModal({ onClose, onAdded, transactions = [
               </div>
             ) : (
               <div style={{ marginTop: 4, fontSize: 12, fontWeight: 600, color: cashShortfall ? 'var(--red)' : 'var(--text-dim)' }}>
-                Available: {fmtCurrencySym(settlementCurrency)}{availableCash.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {settlementCurrency}
+                Available: {fmtCurrencySym(settlementCurrency)}{fmt2(availableCash)} {settlementCurrency}
                 {cashDebit > 0 && (
                   <span style={{ marginLeft: 8, color: 'var(--text-faint)', fontWeight: 400 }}>
-                    · this tx needs {fmtCurrencySym(settlementCurrency)}{cashDebit.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    · this tx needs {fmtCurrencySym(settlementCurrency)}{fmt2(cashDebit)}
                   </span>
                 )}
               </div>
@@ -833,28 +356,7 @@ export default function AddTransactionModal({ onClose, onAdded, transactions = [
 
           <div className="field">
             <label>Transaction Date</label>
-            <div className="field-with-icon" style={{ position: 'relative' }}>
-              <input className="field-input" value={dateText} onChange={e => setDateText(e.target.value)} placeholder="DD/MM/YYYY" />
-              <button type="button" ref={dateIconRef} onClick={() => setDatePopOpen(o => !o)} aria-label="Open calendar"
-                style={{ position: 'absolute', top: '50%', right: 12, transform: 'translateY(-50%)', background: 'transparent', border: 'none', color: 'var(--text-faint)', cursor: 'pointer', padding: 4, display: 'inline-flex' }}>
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                  <rect x="2" y="3" width="12" height="11" rx="1.5" stroke="currentColor" strokeWidth="1.4"/>
-                  <path d="M2 6h12M5 2v3M11 2v3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
-                </svg>
-              </button>
-              {datePopOpen && (
-                <DatePopover
-                  value={dateIso}
-                  anchorRef={dateIconRef}
-                  onPick={(iso) => {
-                    setDateIso(iso);
-                    const [y, m, d] = iso.split('-');
-                    setDateText(`${d}/${m}/${y}`);
-                  }}
-                  onClose={() => setDatePopOpen(false)}
-                />
-              )}
-            </div>
+            <EditDateField value={dateIso} onChange={setDateIso} />
           </div>
 
           {!isCashFlow && (
@@ -915,7 +417,7 @@ export default function AddTransactionModal({ onClose, onAdded, transactions = [
         <div className="modal-foot">
           <div className="total-row">
             <span className="total-label">Total Amount</span>
-            <span className="total-val">{displaySymbol}{displayTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+            <span className="total-val">{displaySymbol}{fmt2(displayTotal)}</span>
           </div>
           {error && (
             <div style={{ fontSize: 13, color: 'var(--red)', marginBottom: 10, padding: '8px 12px', background: 'rgba(248,113,113,0.1)', borderRadius: 8 }}>

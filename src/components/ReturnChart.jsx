@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback, useRef, useEffect, useContext } from 'react';
-import { CurrencyContext, SERIES_BY_PORTFOLIO, RANGES, dateLabelsFor, FX_RATE } from '../data.js';
+import { CurrencyContext, SERIES_BY_PORTFOLIO, RANGES, dateLabelsFor, FX_RATE, fmt2 } from '../data.js';
 import { computeReturnSeries, fetchPriceHistory, computeDailyReturnSeries } from '../lib/api.js';
 import { supabaseEnabled } from '../lib/supabase.js';
 
@@ -252,11 +252,9 @@ export default function ReturnChart({ portfolio = 'All', totalNow, transactions 
   // valueArr / investedArr are already in display currency (USD or THB).
   // Format without further conversion — just attach the right symbol.
   const sym = cur.currency === 'THB' ? '฿' : '$';
-  const fmtMoney = (v) => sym + v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const fmtMoneyCompact = (v) => {
-    if (Math.abs(v) >= 1000) return sym + (v / 1000).toFixed(1) + 'K';
-    return sym + v.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
-  };
+  const fmtMoney = (v) => sym + fmt2(v);
+  const fmtMoneyCompact = (v) =>
+    Math.abs(v) >= 1000 ? sym + Math.round(v / 1000) + 'K' : sym + Math.round(v);
 
   const onMove = (e) => {
     const svg = e.currentTarget;
@@ -284,7 +282,7 @@ export default function ReturnChart({ portfolio = 'All', totalNow, transactions 
   const fmtSignedAmount = (v) => {
     const abs = Math.abs(v);
     const sign = v >= 0 ? '+' : '-';
-    return sign + sym + abs.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return sign + sym + fmt2(abs);
   };
 
   const isEmpty = supabaseEnabled && !series && (!transactions || transactions.length === 0);

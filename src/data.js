@@ -196,6 +196,10 @@ export function fmtCurrency(usd, currency, opts = {}) {
   return '$' + usd.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals }) + (showCode ? ' USD' : '');
 }
 
+// Plain 2-decimal grouping for an already-in-display-currency number (no FX
+// conversion — unlike fmtCurrency). Use when the caller has already converted.
+export const fmt2 = (v) => v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
 export const fmtCurrencySym = (currency) => (currency === 'THB' ? '฿' : '$');
 export const fmtCurrencyCode = (currency) => (currency === 'THB' ? 'THB' : 'USD');
 
