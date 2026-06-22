@@ -54,6 +54,35 @@ On a combined row:
 - **Source** is a sentinel — the literal label "Multiple" — rather than any one
   brokerage's tag.
 
+### Invested capital
+The net money the user has actually put in: cumulative **Deposits** minus
+**Withdrawals**. In THB it is locked at each deposit's exchange rate (the baht
+actually exchanged), not revalued at today's FX. This is the baseline **return**
+is measured against. It is **not** the same as **cost basis**: realized gains
+and dividends that sit as cash count toward portfolio value but not toward
+invested capital, so they surface as return.
+
+### Cost basis
+The money tied up in the shares currently held — `Σ qty·cost` per position,
+summed. Drives the **Average Cost** column (`cost basis / qty`) and converts to
+THB at each buy's historical FX (see ADR 0002). Distinct from **invested
+capital**: cost basis excludes cash held (including dividends and realized
+gains).
+
+### Return
+How much the portfolio has earned on the user's **invested capital**,
+independent of how much was put in: `value − invested capital`, as a ratio over
+invested capital. Because the base is contributed money rather than cost basis,
+dividends and realized gains count as return. Surfaced as "Portfolio Return" /
+"Performance" on the Overview.
+
+### Period return
+**Return** over the selected range (1W, 1M, 3M, 6M, YTD, 1Y, ALL), excluding
+cash moved in or out *during* that range:
+`(value_now − value_start) − net deposits in the period`, over the capital
+deployed at the start. A deposit made mid-range therefore does not register as
+return. For ALL this equals total return (the start value is ~0).
+
 ### Insufficient-funds error
 Raised when importing or editing a transaction would make a cash trajectory dip
 below zero. Today it is most often a *false* error: the buy was really funded by
