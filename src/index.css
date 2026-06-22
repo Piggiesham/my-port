@@ -386,6 +386,8 @@
     .chart-summary-right { margin-left: 0; min-width: 0; }
 
     .pie-body { gap: 16px; }
+    /* Donut fills the card width on mobile, like the asset-list rows. */
+    .pie-svg { max-width: none; }
 
     /* Asset list — stack as cards on mobile */
     .list-controls { padding: 16px; flex-direction: column; align-items: stretch; }

@@ -20,20 +20,6 @@ export default function ReturnChart({ portfolio = 'All', totalNow, transactions 
     }
   });
   const wrapRef = useRef(null);
-  // Measure the plot box so the SVG renders at true pixels (viewBox === size),
-  // avoiding the non-uniform stretch that squashed the line + axis text.
-  const [dims, setDims] = useState({ w: 800, h: 280 });
-
-  useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(() => {
-      const r = el.getBoundingClientRect();
-      if (r.width > 0 && r.height > 0) setDims({ w: Math.round(r.width), h: Math.round(r.height) });
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
 
   useEffect(() => { setHover(null); }, [portfolio, range, mode]);
 
@@ -168,8 +154,8 @@ export default function ReturnChart({ portfolio = 'All', totalNow, transactions 
   // The primary data series rendered as the solid line.
   const data = isPerf ? perfArr : valueArr;
 
-  const W = dims.w, H = dims.h;
-  const padL = 8, padR = W < 480 ? 48 : 72, padT = 16, padB = 28;
+  const W = 800, H = 280;
+  const padL = 8, padR = 72, padT = 16, padB = 28;
   const plotW = W - padL - padR;
   const plotH = H - padT - padB;
 
@@ -239,7 +225,8 @@ export default function ReturnChart({ portfolio = 'All', totalNow, transactions 
   }, [yMin, yMax]);
 
   const xTicks = useMemo(() => {
-    const n = Math.min(W < 480 ? 3 : 5, data.length);
+    const mobile = typeof window !== 'undefined' && window.innerWidth < 600;
+    const n = Math.min(mobile ? 3 : 5, data.length);
     const ticks = [];
     if (useTimeX) {
       for (let i = 0; i < n; i++) {
@@ -254,7 +241,7 @@ export default function ReturnChart({ portfolio = 'All', totalNow, transactions 
       }
     }
     return ticks;
-  }, [W, data.length, useTimeX, tStart, tEnd, tSpan, dates, plotW, x, padL]);
+  }, [data.length, useTimeX, tStart, tEnd, tSpan, dates, plotW, x, padL]);
 
   const fmtDate = (d) => {
     if (range === '1W') return d.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'Asia/Bangkok' });
@@ -374,7 +361,7 @@ export default function ReturnChart({ portfolio = 'All', totalNow, transactions 
       </div>
 
       <div className="chart-wrap" ref={wrapRef}>
-        <svg className="chart-svg" viewBox={`0 0 ${W} ${H}`} onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
+        <svg className="chart-svg" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
           <defs>
             <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor={lineColor} stopOpacity="0.22" />
