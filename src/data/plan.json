@@ -1,0 +1,23 @@
+{
+  "meta": {
+    "updated": "2026-07-06",
+    "riskProfile": "aggressive",
+    "rationale": "Investor is 22 with a multi-decade horizon, so the target tilts hard to growth: maximize compounding now, carry a real speculative sleeve while young enough to recover from drawdowns, keep only a small defensive + cash ballast to limit drag."
+  },
+  "buckets": [
+    { "id": "growth", "name": "Growth", "target": 60 },
+    { "id": "spec", "name": "Speculative", "target": 15 },
+    { "id": "defensive", "name": "Defensive", "target": 15 },
+    { "id": "cash", "name": "Cash", "target": 10 }
+  ],
+  "assignments": {
+    "VOO": "growth", "GOOGL": "growth", "AMZN": "growth", "META": "growth",
+    "MELI": "growth", "UBER": "growth", "TSM": "growth", "NVDA": "growth",
+    "BTC": "spec", "VSAT": "spec",
+    "PM": "defensive", "MA": "defensive",
+    "USD": "cash", "THB": "cash"
+  },
+  "guardrails": { "maxSingleName": 15, "minCash": 5 },
+  "suggestions": [],
+  "research": []
+}
