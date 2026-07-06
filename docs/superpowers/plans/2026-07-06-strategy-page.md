@@ -220,14 +220,14 @@ Create `src/data/plan.json`:
     "USD": "ballast", "THB": "ballast"
   },
   "guardrails": { "maxSingleName": 12, "minCash": 5 },
-  "suggestions": [
-    { "bucket": "growth", "action": "Placeholder — run 'update my plan' to populate", "why": "Seeded before first NotebookLM refresh.", "cite": "" }
-  ],
-  "research": [
-    { "scope": "core", "summary": "Placeholder research note — populated by the NotebookLM refresh.", "cite": "" }
-  ]
+  "suggestions": [],
+  "research": []
 }
 ```
+
+`suggestions`/`research` start **empty** — the panels render nothing until the
+first NotebookLM refresh populates them with real, cited items. This keeps the
+seed valid under `validate-plan.mjs` (no unresolved citations).
 
 - [ ] **Step 2: Sanity-check targets sum to 100**
 
@@ -718,9 +718,11 @@ git commit -m "$(printf 'feat(strategy): Research hub\n\nCo-Authored-By: Claude 
 
 ---
 
-### Task 7: NotebookLM refresh pipeline — **Model: Sonnet** (bump to Opus if auth/CLI proves fiddly)
+### Task 7: NotebookLM refresh pipeline + notebook-targeting fail-safe — **Model: Sonnet** (bump to Opus if auth/CLI proves fiddly)
 
-The local agent side: standing questions, a wrapper script, ignore rules, and operator docs. Nothing here is imported by the web app.
+The local agent side: standing questions, a wrapper that resolves the target notebook **by name** and halts on ambiguity, provenance/health files, ignore rules, and operator docs. Nothing here is imported by the web app.
+
+**Fail-safe requirements (input guard):** the wrapper queries only the NotebookLM notebook titled exactly `claude:my-port`. It lists notebooks and matches by title; **0 or 2+ matches → HALT** (exit non-zero, write `last-run.json` with the reason, touch nothing else). Every run appends to `notebooklm/log.jsonl` and writes `notebooklm/last-run.json`.
 
 **Files:**
 - Create: `notebooklm/questions.md`
@@ -729,8 +731,8 @@ The local agent side: standing questions, a wrapper script, ignore rules, and op
 - Modify: `.gitignore`
 
 **Interfaces:**
-- Consumes: the `notebooklm-py` CLI (installed separately), authenticated via `notebooklm login`.
-- Produces: `notebooklm/*.md` answer files that Claude later distills into `plan.json`.
+- Consumes: the `notebooklm-py` CLI (installed separately), authenticated via `notebooklm login`. Target notebook name from `NOTEBOOKLM_NAME` (default `claude:my-port`).
+- Produces: `notebooklm/fetches/answer-*.md` (grounded answers), `notebooklm/log.jsonl` (provenance), `notebooklm/last-run.json` (health beacon) — which Claude later distills into `plan.json`, gated by `validate-plan.mjs` (Task 8).
 
 - [ ] **Step 1: Create `notebooklm/questions.md`**
 
@@ -749,25 +751,53 @@ The local agent side: standing questions, a wrapper script, ignore rules, and op
 
 ```js
 #!/usr/bin/env node
-// Thin wrapper around the notebooklm-py CLI: asks each standing question and
-// writes the grounded answer to notebooklm/<slug>.md. Run locally only
-// (needs `notebooklm login` first). Verify exact flags with `notebooklm --help`.
+// Wrapper around the notebooklm-py CLI. Resolves the target notebook BY NAME
+// (fail-safe: halt on 0 or 2+ matches), asks each standing question, and writes
+// grounded answers to notebooklm/fetches/. Run locally only (`notebooklm login`
+// first). Verify exact subcommands/flags with `notebooklm --help` and adjust.
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, appendFileSync } from 'node:fs';
 
-const NOTEBOOK = process.env.NOTEBOOKLM_ID;
-if (!NOTEBOOK) { console.error('Set NOTEBOOKLM_ID (your notebook id) first.'); process.exit(1); }
+const NAME = process.env.NOTEBOOKLM_NAME || 'claude:my-port';
+const TS = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 16);
+mkdirSync('notebooklm/fetches', { recursive: true });
 
+const halt = (reason) => {
+  writeFileSync('notebooklm/last-run.json', JSON.stringify({ ts: TS, status: 'failed', error: reason }, null, 2));
+  console.error(`HALT: ${reason}`);
+  process.exit(1);
+};
+
+// --- Input guard: resolve notebook by exact title -------------------------
+let notebooks;
+try {
+  // Expect JSON array of { id, title }. Adjust flags to the tool's CLI.
+  notebooks = JSON.parse(execFileSync('notebooklm', ['notebooks', 'list', '--json'], { encoding: 'utf8' }));
+} catch (e) {
+  halt(`could not list notebooks (auth/API?): ${e.message}`);
+}
+const matches = notebooks.filter(n => n.title === NAME);
+if (matches.length === 0) halt(`no notebook titled "${NAME}" — did you rename it?`);
+if (matches.length > 1)  halt(`multiple notebooks titled "${NAME}" — refusing to guess`);
+const notebookId = matches[0].id;
+
+// --- Ask each standing question, write grounded answers --------------------
 const questions = readFileSync('notebooklm/questions.md', 'utf8')
   .split('\n').filter(l => /^\d+\./.test(l)).map(l => l.replace(/^\d+\.\s*/, '').trim());
 
-mkdirSync('notebooklm', { recursive: true });
-questions.forEach((q, i) => {
-  console.log(`[${i + 1}/${questions.length}] ${q}`);
-  // Adjust the subcommand/flags to match notebooklm-py's CLI (see --help).
-  const answer = execFileSync('notebooklm', ['chat', '--notebook', NOTEBOOK, '--query', q], { encoding: 'utf8' });
-  writeFileSync(`notebooklm/answer-${i + 1}.md`, `# ${q}\n\n${answer}\n`);
-});
+try {
+  questions.forEach((q, i) => {
+    console.log(`[${i + 1}/${questions.length}] ${q}`);
+    const answer = execFileSync('notebooklm', ['chat', '--notebook', notebookId, '--query', q], { encoding: 'utf8' });
+    const file = `notebooklm/fetches/answer-${TS}-q${i + 1}.md`;
+    writeFileSync(file, `# ${q}\n\n_ts: ${TS} · notebook: ${NAME} (${notebookId})_\n\n${answer}\n`);
+    appendFileSync('notebooklm/log.jsonl', JSON.stringify({ ts: TS, question: q, answer_file: file, notebook: NAME, status: 'ok' }) + '\n');
+  });
+} catch (e) {
+  halt(`fetch failed mid-run: ${e.message}`);
+}
+
+writeFileSync('notebooklm/last-run.json', JSON.stringify({ ts: TS, status: 'ok', notebook: NAME, count: questions.length }, null, 2));
 console.log('Done. Now tell Claude: "update my Strategy plan".');
 ```
 
@@ -779,16 +809,24 @@ console.log('Done. Now tell Claude: "update my Strategy plan".');
 One-time setup:
 1. `uv tool install notebooklm-py` (or `pipx install notebooklm-py`)
 2. `notebooklm login` — authenticates with your Google account (Playwright).
-3. Find your notebook id and export it: `export NOTEBOOKLM_ID=...`
+3. In NotebookLM, create the notebook and title it exactly `claude:my-port`.
+   The agent targets ONLY that name. (Override with `NOTEBOOKLM_NAME` if needed.)
 
 Monthly loop:
-1. `node scripts/refresh-strategy.mjs` — writes grounded answers to `notebooklm/answer-*.md`.
-2. Tell Claude: "update my Strategy plan." Claude distills the answers +
-   current holdings into `src/data/plan.json`, shows a diff, and pushes.
+1. `node scripts/refresh-strategy.mjs` — resolves the `claude:my-port` notebook
+   by name (halts if missing or duplicated), asks the standing questions, and
+   writes grounded answers to `notebooklm/fetches/`, updating `log.jsonl` and
+   `last-run.json`.
+2. Tell Claude: "update my Strategy plan." Claude distills the fetched answers +
+   current holdings into `src/data/plan.json`; `validate-plan.mjs` gates the
+   commit (every citation must resolve to a fetched file); Claude shows a diff
+   and pushes.
 
-If the unofficial API breaks: open NotebookLM in the browser, paste the
-questions from `questions.md`, and save each answer into `notebooklm/answer-N.md`
-by hand. Everything downstream is unchanged.
+Fail-safe:
+- Notebook missing / ambiguous → the script HALTS; nothing changes.
+- API broke → `last-run.json` shows `failed`; paste answers into
+  `notebooklm/fetches/answer-<ts>-qN.md` by hand and continue. The validator
+  still enforces that every plan.json citation resolves.
 
 This tooling is LOCAL only — never deployed, never imported by the web app.
 ```
@@ -800,10 +838,13 @@ Append:
 ```
 # Local NotebookLM agent — secrets & config, never commit
 notebooklm/.config
+notebooklm/last-run.json
 .env.notebooklm
 ```
 
-(The `notebooklm/answer-*.md` files ARE committed so the page's citation chips resolve.)
+(The `notebooklm/fetches/*.md` answers and `notebooklm/log.jsonl` ARE committed
+so the page's citation chips resolve and the audit trail persists. `last-run.json`
+is transient local health state, so it's ignored.)
 
 - [ ] **Step 5: Verify the script parses questions (dry, no CLI needed)**
 
@@ -819,9 +860,120 @@ git commit -m "$(printf 'feat(strategy): local NotebookLM refresh pipeline (ques
 
 ---
 
+### Task 8: Plan validator (output guard) — **Model: Sonnet**
+
+Enforces grounded-or-nothing: every citation in `plan.json` must resolve to a real fetched file. Refuses the plan otherwise. Wired as a pre-commit hook.
+
+**Files:**
+- Create: `scripts/validate-plan.mjs`
+- Create: `scripts/validate-plan.selfcheck.mjs`
+- Modify: `package.json` (add a `validate:plan` script)
+
+**Interfaces:**
+- Consumes: `src/data/plan.json`, files under `notebooklm/fetches/`.
+- Produces: `validatePlan(plan, existsFn) → { ok:boolean, errors:string[] }` (exported for the self-check); CLI exit code 0/1.
+
+- [ ] **Step 1: Write the failing self-check**
+
+Create `scripts/validate-plan.selfcheck.mjs`:
+
+```js
+import assert from 'node:assert/strict';
+import { validatePlan } from './validate-plan.mjs';
+
+const exists = (rel) => rel === 'notebooklm/fetches/real.md';   // only this one exists
+
+// Empty arrays → valid (seed state).
+assert.deepEqual(validatePlan({ suggestions: [], research: [] }, exists), { ok: true, errors: [] });
+
+// Resolvable citation → valid.
+assert.ok(validatePlan({ suggestions: [{ cite: 'real.md' }], research: [] }, exists).ok);
+
+// Missing citation file → invalid.
+const bad = validatePlan({ suggestions: [{ cite: 'ghost.md' }], research: [] }, exists);
+assert.equal(bad.ok, false);
+assert.ok(bad.errors[0].includes('ghost.md'));
+
+// Empty citation string → invalid (a claim with no evidence).
+assert.equal(validatePlan({ suggestions: [], research: [{ cite: '' }] }, exists).ok, false);
+
+console.log('validate-plan.selfcheck: OK');
+```
+
+- [ ] **Step 2: Run it to confirm it fails**
+
+Run: `node scripts/validate-plan.selfcheck.mjs`
+Expected: FAIL — `Cannot find module './validate-plan.mjs'`.
+
+- [ ] **Step 3: Implement `scripts/validate-plan.mjs`**
+
+```js
+#!/usr/bin/env node
+// Output guard: every plan.json suggestion/research item must cite a real file
+// under notebooklm/fetches/. Empty arrays are fine (pre-fetch seed state).
+import { existsSync, readFileSync } from 'node:fs';
+
+export function validatePlan(plan, existsFn) {
+  const errors = [];
+  const items = [...(plan.suggestions || []), ...(plan.research || [])];
+  for (const it of items) {
+    const cite = (it.cite || '').trim();
+    if (!cite) { errors.push(`item has empty cite: ${JSON.stringify(it).slice(0, 80)}`); continue; }
+    if (!existsFn(`notebooklm/fetches/${cite}`)) errors.push(`cite does not resolve: ${cite}`);
+  }
+  return { ok: errors.length === 0, errors };
+}
+
+// CLI entry (only when run directly, not when imported by the self-check).
+if (import.meta.url === `file://${process.argv[1]}`) {
+  const plan = JSON.parse(readFileSync('src/data/plan.json', 'utf8'));
+  const { ok, errors } = validatePlan(plan, existsSync);
+  if (!ok) { console.error('plan.json validation FAILED:'); errors.forEach(e => console.error(' - ' + e)); process.exit(1); }
+  console.log('plan.json validation: OK');
+}
+```
+
+- [ ] **Step 4: Run the self-check to confirm it passes**
+
+Run: `node scripts/validate-plan.selfcheck.mjs`
+Expected: prints `validate-plan.selfcheck: OK`.
+
+- [ ] **Step 5: Run the validator against the seeded plan**
+
+Run: `node scripts/validate-plan.mjs`
+Expected: `plan.json validation: OK` (seed has empty arrays).
+
+- [ ] **Step 6: Add npm script + pre-commit hook**
+
+In `package.json` `"scripts"`, add: `"validate:plan": "node scripts/validate-plan.mjs"`.
+
+Create `.git/hooks/pre-commit` (or document it if hooks are managed elsewhere):
+
+```bash
+#!/bin/sh
+# Block commits that would ship an ungrounded plan.json.
+git diff --cached --name-only | grep -q '^src/data/plan.json$' && node scripts/validate-plan.mjs || exit 0
+```
+
+Run: `chmod +x .git/hooks/pre-commit`
+
+- [ ] **Step 7: Lint + commit**
+
+Run: `npx eslint scripts/validate-plan.mjs scripts/validate-plan.selfcheck.mjs`
+Expected: clean.
+
+```bash
+git add scripts/validate-plan.mjs scripts/validate-plan.selfcheck.mjs package.json
+git commit -m "$(printf 'feat(strategy): plan.json citation validator (grounded-or-nothing guard)\n\nCo-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>')"
+```
+
+---
+
 ## Verification (whole feature)
 
 - [ ] `node src/lib/strategy.selfcheck.mjs` → `strategy.selfcheck: OK`
+- [ ] `node scripts/validate-plan.selfcheck.mjs` → `validate-plan.selfcheck: OK`
+- [ ] `node scripts/validate-plan.mjs` → `plan.json validation: OK`
 - [ ] `npx vite build` → succeeds
 - [ ] `npx eslint src/components/StrategyPage.jsx src/components/strategy/*.jsx src/lib/strategy.js src/data.js src/App.jsx` → clean
 - [ ] Dev server: **Strategy** tab shows Workbench ▸ Rebalance ▸ Suggestions ▸ Research; USD/THB toggle converts money; unassigned banner correct; Watchlist gone from nav.
@@ -834,5 +986,7 @@ git commit -m "$(printf 'feat(strategy): local NotebookLM refresh pipeline (ques
 - Suggestions (grounded, cited) → Task 5.
 - Research hub → Task 6.
 - Two-runtime pipeline, standing questions, monthly loop, failure fallback, secrets in .gitignore → Task 7.
+- Fail-safe input guard (target notebook `claude:my-port` by name; halt on 0/2+; last-run.json; log.jsonl) → Task 7.
+- Fail-safe output guard (grounded-or-nothing: every plan.json cite resolves to a fetched file; pre-commit hook) → Task 8.
 - plan.json as source of truth → Task 2 + read-only rendering throughout.
 - Name "Strategy", nav replace, delete Watchlist → Task 3.

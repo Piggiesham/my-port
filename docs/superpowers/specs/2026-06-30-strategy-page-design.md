@@ -45,6 +45,9 @@ gap to it.
   of truth. The page renders it read-only; edits are made by Claude editing the
   file and pushing (Vercel redeploys). No database, no localStorage.
 - **Name:** **Strategy**.
+- **Fail-safe:** the agent targets only the NotebookLM notebook titled
+  `claude:my-port` (halt on missing/ambiguous), and no `plan.json` item may cite
+  research that isn't a real fetched file. See "Fail-safe" below.
 
 ## Architecture
 
@@ -52,7 +55,9 @@ Two runtimes separated by one interface file (`plan.json`):
 
 ```
 LOCAL AGENT (session; Google cookies; may break)
-  notebooklm-py ──standing questions──▶ notebooklm/*.md (grounded, cited)
+  resolve notebook by name "claude:my-port"  (0 or 2+ matches → HALT)
+  notebooklm-py ──standing questions──▶ notebooklm/fetches/*.md (grounded, cited)
+  validate-plan.mjs (every cite must resolve) ── then ──▶
   Claude distills + user decides ─────▶ src/data/plan.json
                                               │ commit + push
                                               ▼
@@ -61,8 +66,39 @@ DEPLOYED APP (Vercel; no secrets; always works)
 ```
 
 The `plan.json` boundary insulates the site from Google's instability: if the
-unofficial API breaks, the user pastes NotebookLM answers into `notebooklm/*.md`
-by hand and everything downstream is unchanged.
+unofficial API breaks, the user pastes NotebookLM answers into
+`notebooklm/fetches/*.md` by hand and everything downstream is unchanged.
+
+## Fail-safe: grounded-or-nothing
+
+The agent must never invent research or query the wrong source. Two guards:
+
+**Input guard — notebook targeting.** The agent may only query the NotebookLM
+notebook titled exactly **`claude:my-port`**. `refresh-strategy.mjs` resolves it
+by name (lists notebooks, matches title) before asking anything — it never
+trusts a bare, copy-pasted notebook id.
+- exactly one match → proceed, record the resolved id/name to `log.jsonl`;
+- zero matches → HALT ("no `claude:my-port` notebook — did you rename it?");
+- two or more → HALT ("ambiguous — refusing to guess").
+- On HALT nothing else runs and `plan.json` is untouched.
+
+**Output guard — evidence-backed distillation.**
+- Raw answers are written **only** by the fetch tool (`notebooklm-py` stdout) or
+  by the user pasting manually — Claude never authors a fetch file. So the raw
+  material is always genuine API output.
+- `validate-plan.mjs` refuses any `plan.json` whose `research[].cite` /
+  `suggestions[].cite` does not resolve to an existing `notebooklm/fetches/*`
+  file. A hallucinated item has no file to cite → validation fails → nothing
+  ships. Runs before every `plan.json` commit (and as a pre-commit hook).
+- A failed/empty fetch writes `notebooklm/last-run.json` (`status: failed` +
+  error) and exits non-zero **without touching `plan.json`** — it degrades to
+  the manual-paste path, never to invention.
+- **Role separation (containment):** the *fetch* step writes only inside
+  `notebooklm/**`; the *distill* step (writes `plan.json`) is a separate action
+  taken in the main session with the user reviewing the diff. No single
+  automated actor both fetches and edits the app.
+- `notebooklm/log.jsonl` (append-only) records every run, so any `plan.json`
+  item traces cite → fetch file → log entry → NotebookLM sources.
 
 ### `plan.json` shape
 
@@ -135,10 +171,13 @@ src/components/strategy/
     SuggestionsPanel.jsx               ③ grounded, cited
     ResearchHub.jsx                    ④ summaries + citation chips
 notebooklm/
-    questions.md                        the standing questions
-    *.md                                grounded answers (committed)
-    .config                             notebook id + auth (.gitignore'd)
-scripts/refresh-strategy.mjs            thin wrapper: notebooklm-py → notebooklm/*.md
+    questions.md                        the standing questions (human-editable)
+    fetches/*.md                        grounded answers per run (committed; cites resolve here)
+    log.jsonl                           provenance: {ts, question, answer_file, sources[], status}
+    last-run.json                       health beacon: {ts, status, error?}
+    .config                             target notebook NAME + resolved id + auth (.gitignore'd)
+scripts/refresh-strategy.mjs            resolve notebook by name → ask → write fetches/ (HALT on 0/2+)
+scripts/validate-plan.mjs               every plan.json cite must resolve to a fetches/ file
 ```
 
 - `App.jsx`: `navItems = ['Overview', 'Transactions', 'Strategy']`; the
@@ -163,22 +202,28 @@ scripts/refresh-strategy.mjs            thin wrapper: notebooklm-py → notebook
 
 ```
 User: "update my Strategy plan"
+  0. refresh-strategy.mjs resolves the notebook named "claude:my-port"
+       (0 or 2+ matches → HALT, nothing changes)
   1. Claude runs notebooklm-py (Bash) → asks the standing questions
-  2. Answers land in notebooklm/*.md (grounded, cited)
-  3. Claude reads them + current holdings → distills into plan.json
-       (refresh suggestions[]/research[]; flag weakened theses;
-        surface newly-held tickers as unassigned)
+  2. Answers land in notebooklm/fetches/*.md; log.jsonl + last-run.json updated
+  3. validate-plan cite check will gate the write; Claude reads answers +
+       current holdings → distills into plan.json (refresh suggestions[]/
+       research[]; flag weakened theses; surface newly-held tickers as unassigned)
   4. Claude shows a diff; user decides target changes
-  5. Claude writes plan.json + pushes → Vercel redeploys
+  5. validate-plan.mjs passes → Claude writes plan.json + pushes → Vercel redeploys
 ```
 
 One-time setup: install the tool (`uv tool` / `pipx`), `notebooklm login` to
-capture the Google session, point `.config` at the notebook id.
+capture the Google session, create a NotebookLM notebook titled exactly
+`claude:my-port`, and point `.config` at the target name.
 
 ## Failure handling
 
-- API broke / Google changed → user pastes NotebookLM answers into
-  `notebooklm/*.md` manually; steps 3–5 unchanged.
+- Notebook `claude:my-port` missing or ambiguous → HALT with the reason;
+  `plan.json` untouched; user fixes the notebook name and retries.
+- API broke / Google changed → `last-run.json` marks failure and the run halts;
+  user pastes NotebookLM answers into `notebooklm/fetches/*.md` manually;
+  steps 3–5 unchanged (validate-plan still enforces the cite links).
 - No new research this month → skip steps 1–2; still tweak targets + re-commit.
 - Deployed site is never affected — it only reads the committed `plan.json`.
 - Secrets (Google cookies/token, notebook id) stay in `.gitignore`'d local
