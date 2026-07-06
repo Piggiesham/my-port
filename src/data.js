@@ -200,6 +200,14 @@ export function fmtCurrency(usd, currency, opts = {}) {
 // conversion — unlike fmtCurrency). Use when the caller has already converted.
 export const fmt2 = (v) => v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+// Money formatter for a USD value using the LIVE fx rate from CurrencyContext
+// (unlike fmtCurrency, which uses the constant FX_RATE). Mirrors AssetList.
+export const fmtLive = (usd, cur) => {
+  const fx = (cur && cur.fxRate) || FX_RATE;
+  const v = cur && cur.currency === 'THB' ? usd * fx : usd;
+  return (cur && cur.currency === 'THB' ? '฿' : '$') + fmt2(v);
+};
+
 export const fmtCurrencySym = (currency) => (currency === 'THB' ? '฿' : '$');
 export const fmtCurrencyCode = (currency) => (currency === 'THB' ? 'THB' : 'USD');
 

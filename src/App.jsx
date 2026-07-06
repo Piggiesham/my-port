@@ -6,7 +6,7 @@ import ReturnChart from './components/ReturnChart.jsx';
 import PieChart from './components/PieChart.jsx';
 import AssetList from './components/AssetList.jsx';
 import TransactionsPage from './components/TransactionsPage.jsx';
-import WatchlistPage from './components/WatchlistPage.jsx';
+import StrategyPage from './components/StrategyPage.jsx';
 
 export default function App() {
   const [navTab, setNavTab] = useState('Overview');
@@ -126,7 +126,7 @@ export default function App() {
     return () => document.removeEventListener('mousedown', onClick);
   }, []);
 
-  const navItems = ['Overview', 'Transactions', 'Watchlist'];
+  const navItems = ['Overview', 'Transactions', 'Strategy'];
 
   return (
     <CurrencyContext.Provider value={ctx}>
@@ -220,7 +220,7 @@ export default function App() {
             onTransactionAdded={refreshFromSupabase}
           />
         )}
-        {navTab === 'Watchlist' && <WatchlistPage />}
+        {navTab === 'Strategy' && <StrategyPage assets={assets} />}
       </div>
     </CurrencyContext.Provider>
   );
