@@ -473,3 +473,11 @@
 .sugg-why { font-size: 12px; color: var(--text-faint); margin-top: 3px; line-height: 1.4; }
 .sugg-cite { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--accent); background: var(--panel-2); padding: 3px 7px; border-radius: 6px; white-space: nowrap; }
 @media (max-width: 880px) { .sugg-row { grid-template-columns: 1fr; } }
+
+.rh-item { border-bottom: 1px solid var(--border); }
+.rh-head { width: 100%; display: flex; justify-content: space-between; align-items: center; padding: 12px 0; background: none; border: none; color: var(--text); cursor: pointer; font-size: 14px; font-weight: 600; }
+.rh-caret { color: var(--text-dim); transition: transform 0.18s; }
+.rh-caret.open { transform: rotate(180deg); }
+.rh-body { padding: 0 0 14px; display: flex; flex-direction: column; gap: 8px; }
+.rh-summary { font-size: 13px; color: var(--text-dim); line-height: 1.5; }
+.rh-cite { align-self: flex-start; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--accent); background: var(--panel-2); padding: 3px 7px; border-radius: 6px; }
