@@ -19,7 +19,8 @@ export default function AllocationWorkbench({ plan }) {
     if (tpl) setDraft(tpl.buckets.map(b => ({ ...b })));
   };
 
-  const setTarget = (id, v) => setDraft(d => d.map(b => b.id === id ? { ...b, target: Number(v) } : b));
+  const setTarget = (id, v) => setDraft(d => d.map(b => b.id === id ? { ...b, target: v } : b));
+  const commitTarget = (id, v) => setDraft(d => d.map(b => b.id === id ? { ...b, target: Number(v) || 0 } : b));
 
   // One-line instruction the user hands to Claude to persist.
   const instruction = useMemo(() => {
@@ -55,13 +56,13 @@ export default function AllocationWorkbench({ plan }) {
           {draft.map(b => (
             <div className="wb-row" key={b.id}>
               <span className="wb-name">{b.name}</span>
-              <input type="range" min="0" max="100" step="1" value={b.target} onChange={e => setTarget(b.id, e.target.value)} />
-              <input className="field-input wb-num" type="number" min="0" max="100" value={b.target} onChange={e => setTarget(b.id, e.target.value)} />
+              <input type="range" min="0" max="100" step="1" aria-label={b.name} value={Number(b.target) || 0} onChange={e => commitTarget(b.id, e.target.value)} />
+              <input className="field-input wb-num" type="number" min="0" max="100" value={b.target} onChange={e => setTarget(b.id, e.target.value)} onBlur={e => commitTarget(b.id, e.target.value)} />
               <span className="wb-pct">%</span>
             </div>
           ))}
 
-          <div className={`wb-sum ${sumOk ? 'ok' : 'bad'}`}>Sum: {sum.toFixed(0)}% {sumOk ? '✓' : '— must equal 100%'}</div>
+          <div className={`wb-sum ${sumOk ? 'ok' : 'bad'}`}>Sum: {sum.toFixed(1)}% {sumOk ? '✓' : '— must equal 100%'}</div>
           {cashViol && <div className="wb-guard">⚠ Ballast/cash {cashBucket.target}% is below your {minCash}% minimum</div>}
 
           <div className="wb-commit">
