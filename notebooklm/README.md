@@ -17,7 +17,7 @@ Monthly loop:
    and pushes.
 
 Fail-safe:
-- Notebook missing / ambiguous → the script HALTS; nothing changes.
+- Notebook missing / ambiguous → the script HALTS; no notebook is queried and no answers are written.
 - API broke → `last-run.json` shows `failed`; paste answers into
   `notebooklm/fetches/answer-<ts>-qN.md` by hand and continue. The validator
   still enforces that every plan.json citation resolves.

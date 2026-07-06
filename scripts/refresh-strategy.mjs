@@ -8,7 +8,7 @@ import { readFileSync, writeFileSync, mkdirSync, appendFileSync } from 'node:fs'
 
 const NAME = process.env.NOTEBOOKLM_NAME || 'claude:my-port';
 const TS = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 16);
-mkdirSync('notebooklm/fetches', { recursive: true });
+mkdirSync('notebooklm', { recursive: true });
 
 const halt = (reason) => {
   writeFileSync('notebooklm/last-run.json', JSON.stringify({ ts: TS, status: 'failed', error: reason }, null, 2));
@@ -24,15 +24,22 @@ try {
 } catch (e) {
   halt(`could not list notebooks (auth/API?): ${e.message}`);
 }
+if (!Array.isArray(notebooks)) halt('unexpected response from `notebooks list` (expected a JSON array of notebooks)');
 const matches = notebooks.filter(n => n.title === NAME);
 if (matches.length === 0) halt(`no notebook titled "${NAME}" — did you rename it?`);
 if (matches.length > 1)  halt(`multiple notebooks titled "${NAME}" — refusing to guess`);
 const notebookId = matches[0].id;
 
 // --- Ask each standing question, write grounded answers --------------------
-const questions = readFileSync('notebooklm/questions.md', 'utf8')
-  .split('\n').filter(l => /^\d+\./.test(l)).map(l => l.replace(/^\d+\.\s*/, '').trim());
+let questions;
+try {
+  questions = readFileSync('notebooklm/questions.md', 'utf8')
+    .split('\n').filter(l => /^\d+\./.test(l)).map(l => l.replace(/^\d+\.\s*/, '').trim());
+} catch (e) {
+  halt(`could not read notebooklm/questions.md: ${e.message}`);
+}
 
+mkdirSync('notebooklm/fetches', { recursive: true });
 try {
   questions.forEach((q, i) => {
     console.log(`[${i + 1}/${questions.length}] ${q}`);
