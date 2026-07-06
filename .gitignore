@@ -5,3 +5,8 @@ dist
 .DS_Store
 *.log
 .vercel
+
+# Local NotebookLM agent — secrets & config, never commit
+notebooklm/.config
+notebooklm/last-run.json
+.env.notebooklm
