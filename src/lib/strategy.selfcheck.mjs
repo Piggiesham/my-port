@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { computeStrategy, findUnassigned, aggregateByTicker } from './strategy.js';
+import { computeStrategy, findUnassigned, aggregateByTicker, ALLOCATION_TEMPLATES } from './strategy.js';
 
 const assets = [
   { ticker: 'VOO',  holdingUSD: 500 },
@@ -36,5 +36,23 @@ assert.ok(core.drift > 0 && core.tradeUSD > 0, 'under-weight bucket => buy');
 assert.deepEqual(findUnassigned(assets, plan.assignments), ['SOFI'], 'unassigned detection');
 const un = r.rows.find(x => x.id === 'unassigned');
 assert.ok(un && Math.abs(un.holdingUSD - 50) < 1e-9, 'Unassigned row carries the 50');
+
+// over-weight bucket => sell (growth = 300/1100 = 27.3% > 25% target)
+const growth = r.rows.find(x => x.id === 'growth');
+assert.ok(growth.drift < 0 && growth.tradeUSD < 0, 'over-weight bucket => sell');
+
+// every allocation template's targets sum to 100
+assert.ok(
+  ALLOCATION_TEMPLATES.every(t => Math.abs(t.buckets.reduce((s, b) => s + b.target, 0) - 100) < 1e-9),
+  'all templates sum to 100',
+);
+
+// regression: a ticker assigned to a non-existent bucket must still surface in unassignedTickers
+const ghost = computeStrategy(
+  [{ ticker: 'FOO', holdingUSD: 10 }],
+  { buckets: [{ id: 'core', name: 'Core', target: 100 }], assignments: { FOO: 'no-such-bucket' } },
+);
+assert.ok(ghost.unassignedTickers.includes('FOO'), 'ghost-bucket ticker surfaced in unassignedTickers');
+assert.ok(Math.abs(ghost.rows.find(x => x.id === 'unassigned').holdingUSD - 10) < 1e-9, 'ghost money lands in Unassigned');
 
 console.log('strategy.selfcheck: OK');

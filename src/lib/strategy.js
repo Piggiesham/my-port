@@ -59,7 +59,7 @@ export function computeStrategy(assets, plan) {
       usdByBucket.set(bid, usdByBucket.get(bid) + usd);
     } else {
       unassignedUsd += usd;
-      if (!assignments[ticker]) unassignedTickers.push(ticker);
+      unassignedTickers.push(ticker);
     }
   }
   const denom = total || 1;
