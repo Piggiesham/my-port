@@ -448,3 +448,21 @@
   .rebal-row { grid-template-columns: 1fr; gap: 8px; }
   .rebal-figures { justify-content: flex-start; gap: 16px; }
 }
+
+.wb-head { display: flex; justify-content: space-between; align-items: center; cursor: pointer; }
+.wb-caret { transition: transform 0.18s; color: var(--text-dim); }
+.wb-caret.open { transform: rotate(180deg); }
+.wb-body { margin-top: 14px; display: flex; flex-direction: column; gap: 10px; }
+.wb-seeds { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.wb-label { font-size: 12px; color: var(--text-faint); }
+.wb-note { font-size: 11px; color: var(--text-faint); }
+.wb-row { display: grid; grid-template-columns: 120px 1fr 72px 16px; gap: 10px; align-items: center; }
+.wb-name { font-size: 13px; font-weight: 600; }
+.wb-num { padding: 6px 8px; text-align: right; }
+.wb-pct { color: var(--text-faint); font-size: 12px; }
+.wb-sum { font-family: 'JetBrains Mono', monospace; font-size: 13px; }
+.wb-sum.ok { color: var(--green); }
+.wb-sum.bad { color: var(--red); }
+.wb-guard { font-size: 12px; color: var(--red); }
+.wb-commit { margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
+.wb-instruction { font-family: 'JetBrains Mono', monospace; font-size: 12px; background: var(--panel-2); padding: 8px 10px; border-radius: 8px; }
