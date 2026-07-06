@@ -466,3 +466,10 @@
 .wb-guard { font-size: 12px; color: var(--red); }
 .wb-commit { margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
 .wb-instruction { font-family: 'JetBrains Mono', monospace; font-size: 12px; background: var(--panel-2); padding: 8px 10px; border-radius: 8px; }
+
+.sugg-row { display: grid; grid-template-columns: 110px 1fr auto; gap: 12px; align-items: start; padding: 12px 0; border-bottom: 1px solid var(--border); }
+.sugg-bucket { font-size: 12px; font-weight: 600; color: var(--text-dim); padding-top: 2px; }
+.sugg-action { font-size: 14px; font-weight: 500; }
+.sugg-why { font-size: 12px; color: var(--text-faint); margin-top: 3px; line-height: 1.4; }
+.sugg-cite { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--accent); background: var(--panel-2); padding: 3px 7px; border-radius: 6px; white-space: nowrap; }
+@media (max-width: 880px) { .sugg-row { grid-template-columns: 1fr; } }
