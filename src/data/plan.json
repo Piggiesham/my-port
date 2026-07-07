@@ -1,6 +1,6 @@
 {
   "meta": {
-    "updated": "2026-07-06",
+    "updated": "2026-07-07",
     "riskProfile": "aggressive",
     "rationale": "Investor is 22 with a multi-decade horizon, so the target tilts hard to growth: maximize compounding now, carry a real speculative sleeve while young enough to recover from drawdowns, keep only a small defensive + cash ballast to limit drag."
   },
@@ -14,10 +14,21 @@
     "VOO": "growth", "GOOGL": "growth", "AMZN": "growth", "META": "growth",
     "MELI": "growth", "UBER": "growth", "TSM": "growth", "NVDA": "growth",
     "BTC": "spec", "VSAT": "spec",
-    "PM": "defensive", "MA": "defensive",
+    "PM": "defensive", "MA": "defensive", "GLDM": "defensive",
     "USD": "cash", "THB": "cash"
   },
   "guardrails": { "maxSingleName": 15, "minCash": 5 },
-  "suggestions": [],
-  "research": []
+  "suggestions": [
+    { "bucket": "growth", "action": "Trim the hidden US mega-cap tech concentration (VOO, GOOGL, META, NVDA, TSM).", "why": "Growth + Speculative = 75% and only LOOKS diversified; it's one factor bet on US tech that would crash together if the crowded growth trade unwinds.", "cite": "answer-2026-07-07T05-21-q3.md" },
+    { "bucket": "growth", "action": "Add non-US / global equity exposure.", "why": "The growth engine relies entirely on continued US outperformance; global and emerging markets are unrepresented, leaving you fully exposed to US-specific stress.", "cite": "answer-2026-07-07T05-21-q3.md" },
+    { "bucket": "defensive", "action": "Add an inflation / real-asset hedge (REIT or commodity); don't rely on Gold alone.", "why": "Portfolio holds 0% commodities and 0% REITs — Gold hedges liquidity crises but not inflation shocks or real-asset income.", "cite": "answer-2026-07-07T05-21-q3.md" },
+    { "bucket": "defensive", "action": "Protect the Defensive + Cash sleeve (25%) — don't thin it to chase growth.", "why": "The source calls it your only lifeline in a 30-50% tech drawdown: it prevents forced selling and gives optionality to buy cheap.", "cite": "answer-2026-07-07T05-21-q2.md" },
+    { "bucket": "spec", "action": "Keep BTC / VSAT strictly capped.", "why": "AI/semiconductor and crypto satellite bets carry severe drawdown risk; the source insists they stay a small, controlled position.", "cite": "answer-2026-07-07T05-21-q4.md" }
+  ],
+  "research": [
+    { "scope": "growth", "summary": "Maps exactly to the source's 'Growth Winner Tilt' blueprint (US Equity 35% + Nasdaq 25%); ~8-10% expected return at 15-20% volatility. Thrives in expansion / falling rates / risk-on; vulnerable to recessions, rate spikes, and unwinding crowded-tech trades (high valuation & duration). Only appropriate with a long horizon and tolerance for 30-50% drawdowns.", "cite": "answer-2026-07-07T05-21-q2.md" },
+    { "scope": "spec", "summary": "AI/semiconductor + BTC satellite: high-beta convexity and an alternative store of value, but prone to extreme drawdowns — must stay a small, strictly-capped sleeve.", "cite": "answer-2026-07-07T05-21-q1.md" },
+    { "scope": "defensive", "summary": "Gold hedges liquidity/confidence crises (real yields down, USD weak) but yields nothing and lags in bull markets; bonds cushion growth shocks and rate cuts but suffer in inflation / yield spikes. A key shock absorber — currently thin (bonds ~5%).", "cite": "answer-2026-07-07T05-21-q1.md" },
+    { "scope": "cash", "summary": "Cash / T-Bills are liquidity + optionality to buy assets cheap during a panic (framed as a 'lifeline', not laziness); the cost is opportunity and inflation drag over the long term.", "cite": "answer-2026-07-07T05-21-q1.md" }
+  ]
 }
