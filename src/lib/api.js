@@ -224,7 +224,9 @@ function fingerprintKey(brokerId, ticker, action, amount, minute, label) {
 export function txFingerprint(t) {
   const brokerId = BROKER_NAME_TO_ID[t.source] ?? t.source ?? '';
   const minute = t.date ? new Date(t.date).toISOString().slice(0, 16) : '';
-  const isCash = CASH_ACTIONS.has(t.action);
+  // Deposits key on their USD value like cash rows — imported statement
+  // deposits carry `value`, not qty (value_usd === shares for USD deposits).
+  const isCash = CASH_ACTIONS.has(t.action) || t.action === 'Deposit';
   const amount = isCash ? Number(t.valueUSD ?? 0).toFixed(2) : Number(t.shares ?? 0).toFixed(8);
   // Only fees need the label (TAF vs SEC collide on USD/0.01/minute); dividends
   // and taxes are already unique by action+ticker+value.
@@ -234,10 +236,11 @@ export function txFingerprint(t) {
 
 export function importedRowFingerprint(r, brokerageId) {
   const minute = r.executedAt ? new Date(r.executedAt).toISOString().slice(0, 16) : '';
-  const isCash = CASH_ACTIONS.has(r.action);
+  const isCash = CASH_ACTIONS.has(r.action) || r.action === 'Deposit';
   const amount = isCash ? Number(r.value ?? 0).toFixed(2) : Number(r.qty ?? 0).toFixed(8);
   const label = r.action === 'Fee' ? (r.label || '') : '';
-  return fingerprintKey(brokerageId, r.ticker, r.action, amount, minute, label);
+  const ticker = r.ticker || (r.action === 'Deposit' ? 'USD' : '');
+  return fingerprintKey(brokerageId, ticker, r.action, amount, minute, label);
 }
 
 // Shares held of a specific ticker in a brokerage, derived from in-memory
@@ -729,120 +732,6 @@ export async function fetchHistoricalPrice(ticker, date) {
 }
 
 // ----------------------------------------------------------------------------
-// Parse a Webull monthly-statement CSV into the same row shape the image
-// importer produces. Runs entirely client-side — no edge function, no quota.
-//
-// Expected sections (only TRADE RECORDS / Stocks is extracted today):
-//   "Monthly Statement YYYY-MM"
-//   "TRADE RECORDS "
-//   "Stocks"
-//   "Currency: USD"
-//   Symbol & Name,Trade Date,Settlement Date,Buy/Sell,Quantity,Traded Price,
-//     Gross Amount,Comm/Fee/Tax,VAT,Net Amount
-//   <data rows…>
-//   "Options"   <-- everything below is ignored
-//
-// Trade row example:
-//   META META PLATFORMS INC,31/10/2025,03/11/2025,BUY,0.26925,657.36,176.99,-0.18,-0.01,177.18
-//
-// Notes:
-// - Ticker is the FIRST whitespace-delimited token of "Symbol & Name".
-// - Dates are DD/MM/YYYY. We don't have a clock time so we stamp 05:00 UTC
-//   (≈ noon Bangkok) — the user can fine-tune in the preview.
-// - Comm/Fee/Tax and VAT are signed negative in the export; we store the
-//   absolute value as positive `fees` / `taxes` to match our DB convention.
-// ----------------------------------------------------------------------------
-function splitCsvLine(line) {
-  const out = [];
-  let cur = '';
-  let inQuote = false;
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i];
-    if (c === '"') {
-      if (inQuote && line[i + 1] === '"') { cur += '"'; i++; }
-      else inQuote = !inQuote;
-    } else if (c === ',' && !inQuote) {
-      out.push(cur);
-      cur = '';
-    } else {
-      cur += c;
-    }
-  }
-  out.push(cur);
-  return out;
-}
-
-export function parseWebullCSV(text) {
-  const lines = (text || '').split(/\r?\n/);
-  const rows = [];
-  let skipped = 0;
-  let inTradeRecords = false;
-  let inStocks = false;
-  let currency = 'USD';
-  let headerSeen = false;
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-
-    if (/TRADE RECORDS/i.test(trimmed)) { inTradeRecords = true; inStocks = false; headerSeen = false; continue; }
-    if (/^PORTFOLIO/i.test(trimmed) || /^Portfolio Advisory/i.test(trimmed)) { inTradeRecords = false; inStocks = false; continue; }
-
-    if (inTradeRecords) {
-      if (/^Stocks\b/i.test(trimmed))  { inStocks = true;  headerSeen = false; continue; }
-      if (/^Options\b/i.test(trimmed)) { inStocks = false; headerSeen = false; continue; }
-    }
-    if (!inStocks) continue;
-
-    const cells = splitCsvLine(line);
-    const first = (cells[0] || '').trim();
-
-    if (first.startsWith('Currency:')) {
-      currency = first.split(':')[1]?.trim() || 'USD';
-      continue;
-    }
-    if (first === 'Symbol & Name') { headerSeen = true; continue; }
-    if (!headerSeen) continue;
-
-    // Webull pads its sections with `"",,,,` rows — skip them silently so
-    // the user's "skipped" counter only reflects rows we actually tried to
-    // parse.
-    if (cells.every(c => c.trim() === '')) continue;
-
-    const sym = first;
-    const tradeDate = (cells[1] || '').trim();
-    const buyOrSell = (cells[3] || '').trim().toUpperCase();
-    const qty = parseFloat(cells[4]);
-    const price = parseFloat(cells[5]);
-    const fee = Math.abs(parseFloat(cells[7]) || 0);
-    const vat = Math.abs(parseFloat(cells[8]) || 0);
-
-    const ticker = sym.split(/\s+/)[0]?.toUpperCase();
-    const action = buyOrSell === 'BUY' ? 'Buy' : buyOrSell === 'SELL' ? 'Sell' : null;
-    const dm = tradeDate.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-
-    if (!ticker || !action || !isFinite(qty) || qty <= 0 || !isFinite(price) || !dm) {
-      skipped++;
-      continue;
-    }
-    const [, dd, mm, yyyy] = dm;
-    const executedAt = `${yyyy}-${mm}-${dd}T12:00:00Z`; // noon Bangkok (stored as-is)
-
-    rows.push({
-      action,
-      ticker,
-      qty,
-      executedPrice: price,
-      currency: currency === 'THB' ? 'THB' : 'USD',
-      executedAt,
-      fees: fee,
-      taxes: vat,
-    });
-  }
-  return { rows, skipped };
-}
-
-// ----------------------------------------------------------------------------
 // Parse a transaction-history screenshot via the parse-transactions-image
 // edge function. `file` is a Blob/File from an <input type=file>.
 // Returns { rows, skipped } where rows is an array of:
@@ -884,7 +773,12 @@ export async function parseTransactionsImage(file, brokerage = '', bucket = 'sec
   // Downscale before sending so we don't blow Supabase's edge-function body
   // limit on full-resolution phone screenshots. Long edge capped at 1600px,
   // re-encoded to JPEG at quality 0.85. Text stays plenty readable for OCR.
-  const { blob, mimeType: outMime } = await downscaleImageBlob(file, 1600, 0.85);
+  // PDFs (Webull statements, ~30KB) pass through untouched — Gemini reads
+  // them natively.
+  const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name || '');
+  const { blob, mimeType: outMime } = isPdf
+    ? { blob: file, mimeType: 'application/pdf' }
+    : await downscaleImageBlob(file, 1600, 0.85);
 
   // Send as multipart/form-data via supabase-js. The SDK forwards FormData
   // bodies as multipart/form-data (no JSON serialization, no base64 inflation)

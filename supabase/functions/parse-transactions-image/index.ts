@@ -89,6 +89,41 @@ Critical Dime! format rules:
 
 Return ONLY a valid JSON array. No markdown fences, no commentary.`;
 
+const PROMPT_WEBULL = `You are extracting transactions from a Webull (Thailand) Monthly Account Statement PDF.
+
+Extract rows from these sections ONLY (skip NET ACCOUNT VALUE, CASH REPORT SUMMARY, PORTFOLIO SUMMARY, NOTES):
+
+1. TRADE RECORDS → one object per trade:
+{
+  "action": "Buy" | "Sell",
+  "ticker": "<Symbol, uppercase>",
+  "qty": <Quantity>,
+  "executedPrice": <Traded Price>,
+  "fees": <absolute value of Comm/Fee/Tax, e.g. -0.18 → 0.18; 0 if blank>,
+  "taxes": <absolute value of VAT; 0 if blank>,
+  "currency": "USD",
+  "executedAt": "<from Trade Date + Time, ISO 8601. Time column is GMT+07 — output with +07:00 offset, e.g. 22/06/2026 23:42:48 → \\"2026-06-22T23:42:48+07:00\\">"
+}
+
+2. DIVIDENDS → TWO objects per row (dates are DD/MM/YYYY):
+   { "action": "Dividend", "ticker": "<symbol from the description, e.g. META PLATFORMS INC → META>", "value": <Gross Amount>, "currency": "USD", "executedAt": "<Posting Date>T12:00:00+07:00", "label": "<the description text>" }
+   and, when Withholding Tax is non-zero:
+   { "action": "Tax", "ticker": "<same symbol>", "value": <absolute value of Withholding Tax>, "currency": "USD", "executedAt": "<Posting Date>T12:00:00+07:00", "label": "Dividend withholding tax" }
+
+3. INTEREST → { "action": "Dividend", "ticker": "USD", "value": <Amount>, "currency": "USD", "executedAt": "<Date>T12:00:00+07:00", "label": "<description, e.g. Credit Interest 05/01/2026 to 05/31/2026>" }
+   INTEREST WHT → { "action": "Tax", "ticker": "USD", "value": <absolute Amount>, "currency": "USD", "executedAt": "<Date>T12:00:00+07:00", "label": "<description>" }
+
+4. CURRENCY EXCHANGE RECORDS (THB → USD) → the account's real funding events:
+   { "action": "Deposit", "value": <Converted Amount in USD>, "fxRate": <Converted Rate, THB per USD>, "currency": "USD", "executedAt": "<Date + Time with +07:00 offset>" }
+   Skip the DEPOSIT & WITHDRAWAL RECORDS THB rows — the exchange row is the one that matters.
+
+Rules:
+- Dates in this statement are DD/MM/YYYY. 02/06/2026 means 2 June 2026.
+- Amounts: strip thousands separators; output plain numbers.
+- If a field is unreadable, set it to null. Do not invent values.
+
+Return ONLY a valid JSON array. No markdown fences, no commentary.`;
+
 const PROMPT_SECURITY = `You are extracting transactions from a screenshot of a brokerage transaction list.
 
 ONLY extract rows whose action is "Buy" or "Sell". Skip every other row type — fees (TAF Fee, SEC Fee, ECN Fee, etc.), dividends, dividend withholding tax, deposits, withdrawals, transfers. Skip month-header rows like "December 2024".
@@ -248,7 +283,10 @@ Deno.serve(async (req) => {
 
     // Brokerage-specific prompt. Dime!'s "Executed Price" is always USD/share
     // even when the total amount is in THB, so it needs its own instructions.
-    const prompt = brokerage === 'Dime!' ? PROMPT_DIME : PROMPT_SECURITY;
+    // Webull uploads are monthly statement PDFs, not screenshots.
+    const prompt = brokerage === 'Dime!' ? PROMPT_DIME
+      : brokerage === 'Webull' ? PROMPT_WEBULL
+      : PROMPT_SECURITY;
 
     // Route to the configured provider.
     const result = PROVIDER === 'groq'
@@ -290,7 +328,13 @@ Deno.serve(async (req) => {
       typeof r.value === 'number' && isFinite(r.value) && r.value > 0 &&
       typeof r.executedAt === 'string' && r.executedAt.length > 0;
 
-    const valid = (rows as Array<Record<string, unknown>>).filter(r => isTrade(r) || isCashRow(r));
+    // Deposit — a THB→USD funding exchange from a Webull statement.
+    const isDeposit = (r: Record<string, unknown>) =>
+      r.action === 'Deposit' &&
+      typeof r.value === 'number' && isFinite(r.value) && r.value > 0 &&
+      typeof r.executedAt === 'string' && r.executedAt.length > 0;
+
+    const valid = (rows as Array<Record<string, unknown>>).filter(r => isTrade(r) || isCashRow(r) || isDeposit(r));
 
     return json({ rows: valid, skipped: (rows as unknown[]).length - valid.length });
   } catch (err) {

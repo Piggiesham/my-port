@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { SOURCES, PORTFOLIO_TYPES, FX_RATE, utcIsoToBkkParts, bkkPartsToUtcIso, fmtDateBkk, fmtCurrencySym } from '../data.js';
-import { importTransactions, parseTransactionsImage, parseWebullCSV, fetchHistoricalPrice, txFingerprint, importedRowFingerprint, fetchAssetCatalog, createAsset, searchYahooSymbols } from '../lib/api.js';
+import { importTransactions, parseTransactionsImage, fetchHistoricalPrice, txFingerprint, importedRowFingerprint, fetchAssetCatalog, createAsset, searchYahooSymbols } from '../lib/api.js';
 
 // Same mapping used by AddTransactionModal so auto-created assets get the
 // correct internal type label.
@@ -12,11 +12,12 @@ const YAHOO_TYPE_TO_ASSET = {
   CURRENCY: 'Cash',
 };
 
-// Per-brokerage import sources. Webull exports CSVs (parsed in-browser);
-// Dime! uploads are screenshots that go through the Gemini edge function.
+// Per-brokerage import sources. Webull uploads are monthly statement PDFs
+// (they carry dividends/interest/deposits the CSV export lacks); Dime!
+// uploads are screenshots. Both go through the Gemini edge function.
 const BROKER_SOURCE = {
   'Dime!':   'image',
-  'Webull':  'csv',
+  'Webull':  'pdf',
   'Binance': null,   // not supported yet
 };
 
@@ -50,13 +51,13 @@ export default function ImportModal({ onClose, onDone, transactions = [] }) {
   const onFilesPicked = (list) => {
     if (!list || list.length === 0) return;
     const picked = Array.from(list);
-    const isCsv = (f) => f.type === 'text/csv' || /\.csv$/i.test(f.name);
+    const isPdf = (f) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name);
     if (source === 'image' && picked.find(f => !f.type.startsWith('image/'))) {
-      setError('This brokerage expects screenshots. CSVs aren’t supported here.');
+      setError('This brokerage expects screenshots. PDFs aren’t supported here.');
       return;
     }
-    if (source === 'csv' && picked.find(f => !isCsv(f))) {
-      setError('This brokerage expects CSV exports. Images aren’t supported here.');
+    if (source === 'pdf' && picked.find(f => !isPdf(f))) {
+      setError('This brokerage expects monthly statement PDFs. Images aren’t supported here.');
       return;
     }
     setError(null);
@@ -85,23 +86,13 @@ export default function ImportModal({ onClose, onDone, transactions = [] }) {
       let merged = [];
       let skippedTotal = 0;
       let nextId = 0;
-      if (source === 'csv') {
-        // CSV path — runs locally, no rate limit. Read each file and parse.
-        for (let i = 0; i < files.length; i++) {
-          const text = await files[i].file.text();
-          const { rows, skipped } = parseWebullCSV(text);
-          skippedTotal += skipped;
-          for (const r of rows) merged.push({ ...r, _id: nextId++ });
-        }
-      } else {
-        // Image path — 4s between calls keeps us under both 5/min
-        // (gemini-2.5-flash) and 15/min (lite).
-        for (let i = 0; i < files.length; i++) {
-          if (i > 0) await new Promise(r => setTimeout(r, 4000));
-          const { rows, skipped } = await parseTransactionsImage(files[i].file, portfolio, bucket);
-          skippedTotal += skipped;
-          for (const r of rows) merged.push({ ...r, _id: nextId++ });
-        }
+      // Image/PDF path — 4s between calls keeps us under both 5/min
+      // (gemini-2.5-flash) and 15/min (lite).
+      for (let i = 0; i < files.length; i++) {
+        if (i > 0) await new Promise(r => setTimeout(r, 4000));
+        const { rows, skipped } = await parseTransactionsImage(files[i].file, portfolio, bucket);
+        skippedTotal += skipped;
+        for (const r of rows) merged.push({ ...r, _id: nextId++ });
       }
 
       const localBrokerMap = { 'Dime!': 'dime', 'Webull': 'webull', 'Binance': 'binance' };
@@ -238,6 +229,12 @@ export default function ImportModal({ onClose, onDone, transactions = [] }) {
     }
     for (const r of sel) {                              // new rows → order 1
       const tk = (r.ticker || '').toUpperCase();
+      if (r.action === 'Deposit') {
+        // Statement funding deposit — cash in, so the preflight doesn't
+        // propose a duplicate fix-deposit for the buys it funds.
+        events.push({ ms: new Date(r.executedAt).getTime(), order: 1, ticker: 'USD', cash: Number(r.value) || 0 });
+        continue;
+      }
       if (CASH_ROW.has(r.action)) {
         const v = Number(r.value) || 0;
         events.push({ ms: new Date(r.executedAt).getTime(), order: 1, ticker: tk, cash: r.action === 'Dividend' ? v : -v });
@@ -309,6 +306,16 @@ export default function ImportModal({ onClose, onDone, transactions = [] }) {
       });
     }
     for (const r of tradeRows) {
+      if (r.action === 'Deposit') {
+        // Statement THB→USD exchange: shares = USD amount, fx = THB per USD.
+        const amt = Number(r.value) || 0;
+        entries.push({
+          sortIso: r.executedAt,
+          meta: { kind: 'trade', rowId: r._id },
+          item: { portfolio, ticker: 'USD', action: 'Deposit', shares: amt, price: 1, valueUsd: amt, description: r.label || 'Statement deposit', executedAt: r.executedAt, fxRateAtTx: Number(r.fxRate) || null },
+        });
+        continue;
+      }
       if (CASH_ROW.has(r.action)) {
         // Dividend / Fee / Tax — USD cash rows. value_usd carries the amount;
         // the broker label goes in description so re-imports dedup correctly.
@@ -346,7 +353,7 @@ export default function ImportModal({ onClose, onDone, transactions = [] }) {
 
     let batch;
     try {
-      await ensureAssets([...new Set(tradeRows.map(r => r.ticker.toUpperCase()))]);
+      await ensureAssets([...new Set(tradeRows.map(r => (r.ticker || '').toUpperCase()).filter(Boolean))]);
       batch = await buildBatch(tradeRows, deposits);
     } catch (err) {
       setError(`Couldn't prepare import: ${err.message || err}`);
@@ -390,7 +397,7 @@ export default function ImportModal({ onClose, onDone, transactions = [] }) {
       <div className="picker-grid">
         {[
           { id: 'Dime!',   enabled: true,  hint: 'Screenshots' },
-          { id: 'Webull',  enabled: true,  hint: 'Monthly CSV statement' },
+          { id: 'Webull',  enabled: true,  hint: 'Monthly statement PDF' },
           { id: 'Binance', enabled: false, hint: 'Coming soon' },
         ].map(b => (
           <button
@@ -444,20 +451,20 @@ export default function ImportModal({ onClose, onDone, transactions = [] }) {
   );
 
   const renderUpload = () => {
-    const isCsv = source === 'csv';
-    const prompt = isCsv
-      ? 'Upload one or more Webull monthly-statement CSVs.'
+    const isPdf = source === 'pdf';
+    const prompt = isPdf
+      ? 'Upload one or more Webull Monthly Account Statement PDFs.'
       : 'Upload one or more screenshots of your transaction list.';
     const chooseLabel = files.length === 0
-      ? (isCsv ? 'Click to choose CSV files' : 'Click to choose images')
-      : (isCsv ? '+ Add more CSV files' : '+ Add more images');
+      ? (isPdf ? 'Click to choose PDF statements' : 'Click to choose images')
+      : (isPdf ? '+ Add more PDFs' : '+ Add more images');
     return (
       <div className="modal-body">
         <p className="picker-prompt">{prompt}</p>
         <input
           ref={fileInputRef}
           type="file"
-          accept={isCsv ? '.csv,text/csv' : 'image/*'}
+          accept={isPdf ? '.pdf,application/pdf' : 'image/*'}
           multiple
           style={{ display: 'none' }}
           onChange={(e) => onFilesPicked(e.target.files)}
@@ -476,7 +483,7 @@ export default function ImportModal({ onClose, onDone, transactions = [] }) {
                 {f.preview ? (
                   <img src={f.preview} alt="" style={{ width: 60, height: 60, objectFit: 'cover', borderRadius: 4 }} />
                 ) : (
-                  <div style={{ width: 60, height: 60, background: 'var(--panel-2)', borderRadius: 4, display: 'grid', placeItems: 'center', color: 'var(--text-faint)', fontSize: 11, fontWeight: 600 }}>CSV</div>
+                  <div style={{ width: 60, height: 60, background: 'var(--panel-2)', borderRadius: 4, display: 'grid', placeItems: 'center', color: 'var(--text-faint)', fontSize: 11, fontWeight: 600 }}>PDF</div>
                 )}
                 <div style={{ fontSize: 12, color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.file.name}</div>
                 <button type="button" onClick={() => removeFile(idx)} aria-label="Remove" style={{ color: 'var(--text-faint)', fontSize: 16 }}>✕</button>
@@ -485,8 +492,8 @@ export default function ImportModal({ onClose, onDone, transactions = [] }) {
           </div>
         )}
         <p style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 12 }}>
-          {isCsv
-            ? 'Only Buy/Sell stock rows under TRADE RECORDS are extracted. Options, portfolio summary, and dividends are skipped. Overlapping rows across CSVs are deduplicated automatically.'
+          {isPdf
+            ? 'Trades, dividends, withholding tax, credit interest, and THB→USD deposits are extracted from the statement. Overlapping rows across PDFs are deduplicated automatically.'
             : 'Buys, sells, dividends, withholding tax, and TAF/SEC fees are extracted. Cancelled and Expired orders are skipped. Overlapping rows across images are deduplicated automatically.'}
         </p>
       </div>
@@ -524,8 +531,8 @@ export default function ImportModal({ onClose, onDone, transactions = [] }) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 360, overflow: 'auto' }}>
           {sortedRows.map(r => {
             const expanded = r._id === expandedRowId;
-            const isCash = CASH_ROW.has(r.action);
-            const actionColor = (r.action === 'Buy' || r.action === 'Dividend') ? 'var(--green)' : 'var(--red)';
+            const isCash = CASH_ROW.has(r.action) || r.action === 'Deposit';
+            const actionColor = (r.action === 'Buy' || r.action === 'Dividend' || r.action === 'Deposit') ? 'var(--green)' : 'var(--red)';
             const priceStr = (Number(r.executedPrice) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 6 });
             const valueStr = (Number(r.value) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
             const dg = r._status === 'fail' ? diagnose(r._error) : null;
@@ -555,14 +562,14 @@ export default function ImportModal({ onClose, onDone, transactions = [] }) {
                   />
                   <span style={{ fontSize: 13, fontWeight: 600 }}>
                     <span style={{ color: actionColor, marginRight: 8 }}>{r.action}</span>
-                    <span>{r.ticker}</span>
+                    <span>{r.ticker || (r.action === 'Deposit' ? 'USD' : '')}</span>
                   </span>
                   <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>
                     {fmtDateBkk(r.executedAt)}
                   </span>
                   <span style={{ fontSize: 12, color: 'var(--text)', fontFamily: 'JetBrains Mono, monospace', textAlign: 'right' }}>
                     {isCash
-                      ? `${r.action === 'Dividend' ? '+' : '−'}$${valueStr} USD`
+                      ? `${(r.action === 'Dividend' || r.action === 'Deposit') ? '+' : '−'}$${valueStr} USD`
                       : `${fmtCurrencySym(r.currency)}${priceStr} ${r.currency}`}
                   </span>
                   <span style={{ minWidth: 80, textAlign: 'right' }}>
@@ -749,7 +756,7 @@ export default function ImportModal({ onClose, onDone, transactions = [] }) {
               <button className="btn-primary" disabled={files.length === 0 || analyzing} onClick={analyze}>
                 {(() => {
                   if (analyzing) return 'Analyzing…';
-                  const label = source === 'csv' ? 'CSV' : 'image';
+                  const label = source === 'pdf' ? 'PDF' : 'image';
                   return files.length > 1 ? `Analyze ${files.length} ${label}s` : `Analyze ${label}`;
                 })()}
               </button>
