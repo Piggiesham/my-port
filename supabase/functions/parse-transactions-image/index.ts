@@ -288,8 +288,10 @@ Deno.serve(async (req) => {
       : brokerage === 'Webull' ? PROMPT_WEBULL
       : PROMPT_SECURITY;
 
-    // Route to the configured provider.
-    const result = PROVIDER === 'groq'
+    // Route to the configured provider. PDFs always go to Gemini — Groq's
+    // Llama vision endpoint only accepts images ("invalid image data").
+    const isPdf = mimeType === 'application/pdf';
+    const result = (PROVIDER === 'groq' && !isPdf)
       ? await callGroq(imageBase64, mimeType, prompt)
       : await callGemini(imageBase64, mimeType, prompt);
     if ('error' in result) return json(result);
