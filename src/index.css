@@ -445,7 +445,6 @@
 .contrib-bar span { display: block; height: 100%; border-radius: 4px; }
 .contrib-pp { text-align: right; }
 .contrib-gain { text-align: right; color: var(--text-dim); }
-.dd-wrap { position: relative; height: 120px; }
 @media (max-width: 700px) {
   .contrib-row { grid-template-columns: 52px 1fr 74px 90px; gap: 8px; font-size: 12px; }
 }

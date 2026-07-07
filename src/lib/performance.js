@@ -91,31 +91,6 @@ export function maxDrawdown(twrSeries) {
   return worst;
 }
 
-// Underwater series + stats from a cumulative TWR series.
-// Returns { series: [{date, dd}], worst, current, recoveryDays } where dd ≤ 0
-// in %, and recoveryDays is trough → regained-prior-peak (null if not yet).
-export function drawdownStats(twrSeries) {
-  if (!twrSeries || twrSeries.length === 0) return null;
-  const MS_PER_DAY = 86400000;
-  let peak = -Infinity;
-  let worst = 0, troughIdx = 0, peakAtTrough = 1;
-  const series = twrSeries.map((p, i) => {
-    const level = 1 + p.pct / 100;
-    if (level > peak) peak = level;
-    const dd = peak > 0 ? Math.min(0, (level / peak - 1) * 100) : 0;
-    if (dd < worst) { worst = dd; troughIdx = i; peakAtTrough = peak; }
-    return { date: p.date, dd };
-  });
-  let recoveryDays = null;
-  for (let i = troughIdx + 1; i < twrSeries.length; i++) {
-    if (1 + twrSeries[i].pct / 100 >= peakAtTrough) {
-      recoveryDays = Math.round((twrSeries[i].date - twrSeries[troughIdx].date) / MS_PER_DAY);
-      break;
-    }
-  }
-  return { series, worst, current: series[series.length - 1].dd, recoveryDays };
-}
-
 // Per-ticker contribution to the period's return.
 // Replays quantities up to `from`, values positions at the range ends against
 // priceHistory, and nets out intra-range flows so only market moves,

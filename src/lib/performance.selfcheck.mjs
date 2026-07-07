@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import {
   computeTwrSeries, computeBenchmarkSeries, maxDrawdown, annualizedVolatility,
-  modifiedDietz, drawdownStats, computeContribution,
+  modifiedDietz, computeContribution,
 } from './performance.js';
 
 const d = (n) => new Date(Date.UTC(2026, 0, 1 + n));
@@ -82,18 +82,6 @@ close(modifiedDietz([
   { date: d(2), value: 231, invested: 200 },
 ]), (31 / 150) * 100, 1e-6);
 assert.equal(modifiedDietz([{ date: d(0), value: 0, invested: 0 }]), null);
-
-// --- Drawdown stats -------------------------------------------------------------
-// 0 → +20 → −10 (dd −25%) → +20 (recovered, level 1.2 == peak)
-const ds = drawdownStats([{ pct: 0 }, { pct: 20 }, { pct: -10 }, { pct: 20 }].map((p, i) => ({ date: d(i), ...p })));
-close(ds.worst, -25);
-close(ds.current, 0);
-assert.equal(ds.recoveryDays, 1);
-close(ds.series[2].dd, -25);
-// Never recovered → recoveryDays null, current negative.
-const ds2 = drawdownStats([{ pct: 0 }, { pct: 20 }, { pct: -10 }].map((p, i) => ({ date: d(i), ...p })));
-assert.equal(ds2.recoveryDays, null);
-close(ds2.current, -25);
 
 // --- Contribution -----------------------------------------------------------------
 const hist = new Map([

@@ -3,7 +3,7 @@ import { SOURCES, PORTFOLIOS, RANGES, CurrencyContext, FX_RATE, fmt2 } from '../
 import { fetchPriceHistory, computeDailyReturnSeries } from '../lib/api.js';
 import {
   computeTwrSeries, computeBenchmarkSeries, maxDrawdown, annualizedVolatility,
-  modifiedDietz, drawdownStats, computeContribution,
+  modifiedDietz, computeContribution,
 } from '../lib/performance.js';
 import { supabaseEnabled } from '../lib/supabase.js';
 import { useClickOutside } from '../lib/useClickOutside.js';
@@ -46,7 +46,7 @@ export default function PerformancePage({ transactions = [] }) {
   const [range, setRange] = useState('1Y');
   const [benchOpen, setBenchOpen] = useState(false);
   const [hover, setHover] = useState(null);
-  const [loaded, setLoaded] = useState(null); // { twr, bench, mwr, contrib, dd } or null while loading
+  const [loaded, setLoaded] = useState(null); // { twr, bench, mwr, contrib } or null while loading
   const benchRef = useRef(null);
   const wrapRef = useRef(null);
   const cur = useContext(CurrencyContext);
@@ -91,7 +91,6 @@ export default function PerformancePage({ transactions = [] }) {
         bench,
         mwr: modifiedDietz(daily),
         contrib: computeContribution(filteredTxs, hist, from, to),
-        dd: drawdownStats(twr),
       });
     }).catch(err => console.warn('[PerformancePage] series failed', err));
 
@@ -370,10 +369,6 @@ export default function PerformancePage({ transactions = [] }) {
         <ContributionCard contrib={loaded.contrib} rangeLabel={RANGES[range].label} portfolio={portfolio} cur={cur} />
       )}
 
-      {!isEmpty && loaded?.dd && (
-        <DrawdownCard dd={loaded.dd} rangeLabel={RANGES[range].label} />
-      )}
-
       <div className="foot">Benchmark is ETF price return — dividends excluded (~1–1.5pp/yr) · Not financial advice</div>
     </div>
   );
@@ -415,45 +410,6 @@ function ContributionCard({ contrib, rangeLabel, portfolio, cur }) {
           })}
         </div>
       )}
-    </div>
-  );
-}
-
-// Underwater chart: how far below the last peak, over the range.
-function DrawdownCard({ dd, rangeLabel }) {
-  const ref = useRef(null);
-  const { w: W, h: H } = useBoxSize(ref, true, { w: 800, h: 120 });
-  const padL = 8, padR = 72, padT = 6, padB = 6;
-  const plotW = W - padL - padR;
-  const plotH = H - padT - padB;
-  const floor = Math.min(dd.worst, -1) * 1.1; // y-domain [floor, 0]
-  const y = v => padT + ((0 - v) / (0 - floor)) * plotH;
-  const t0 = dd.series[0].date.getTime();
-  const tSpan = dd.series[dd.series.length - 1].date.getTime() - t0 || 1;
-  const x = d => padL + ((d.getTime() - t0) / tSpan) * plotW;
-  let path = `M ${padL.toFixed(2)} ${y(0).toFixed(2)} `;
-  for (const p of dd.series) path += `L ${x(p.date).toFixed(2)} ${y(p.dd).toFixed(2)} `;
-  path += `L ${(padL + plotW).toFixed(2)} ${y(0).toFixed(2)} Z`;
-  return (
-    <div className="card" style={{ marginTop: 20 }}>
-      <div className="card-head">
-        <div>
-          <div className="card-title">Drawdown</div>
-          <div className="card-sub">
-            {rangeLabel} · worst {dd.worst.toFixed(2)}%
-            {dd.worst < 0 && ` · ${dd.recoveryDays != null ? `recovered in ${dd.recoveryDays}d` : 'not yet recovered'}`}
-            {` · now ${dd.current.toFixed(2)}%`}
-          </div>
-        </div>
-      </div>
-      <div className="dd-wrap" ref={ref}>
-        <svg className="chart-svg" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
-          <line className="grid-line" x1={padL} x2={padL + plotW} y1={y(0)} y2={y(0)} />
-          <path d={path} fill="rgba(248,113,113,0.18)" stroke="#f87171" strokeWidth="1.5" strokeLinejoin="round" />
-          <text className="axis-label" x={padL + plotW + 8} y={y(0) + 4} textAnchor="start">0%</text>
-          <text className="axis-label" x={padL + plotW + 8} y={y(floor) + 4} textAnchor="start">{floor.toFixed(0)}%</text>
-        </svg>
-      </div>
     </div>
   );
 }
