@@ -526,17 +526,25 @@ export async function fetchPriceHistory(tickers, from, to) {
   const toStr = toYMD(to);
 
   const uniq = [...new Set(tickers)];
-  const { data: cached, error } = await supabase
-    .from('price_history')
-    .select('ticker, date, price_usd')
-    .in('ticker', uniq)
-    .gte('date', fromStr)
-    .lte('date', toStr);
-  if (error) console.warn('[price_history] read failed', error.message);
-
   for (const t of uniq) result.set(t, new Map());
-  for (const row of cached ?? []) {
-    result.get(row.ticker)?.set(row.date, Number(row.price_usd));
+  // Paginate: Supabase caps a response at 1000 rows, and a full-range read
+  // across all tickers is easily 5–10k. Without this the cache silently
+  // truncates and the gap-filler re-hits the Yahoo edge fn on every load.
+  const PAGE = 1000;
+  for (let off = 0; ; off += PAGE) {
+    const { data: page, error } = await supabase
+      .from('price_history')
+      .select('ticker, date, price_usd')
+      .in('ticker', uniq)
+      .gte('date', fromStr)
+      .lte('date', toStr)
+      .order('ticker').order('date')
+      .range(off, off + PAGE - 1);
+    if (error) { console.warn('[price_history] read failed', error.message); break; }
+    for (const row of page ?? []) {
+      result.get(row.ticker)?.set(row.date, Number(row.price_usd));
+    }
+    if (!page || page.length < PAGE) break;
   }
 
   await Promise.all(uniq.map(async (ticker) => {
