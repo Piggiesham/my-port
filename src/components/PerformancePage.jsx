@@ -28,6 +28,7 @@ export default function PerformancePage({ transactions = [] }) {
   const [benchOpen, setBenchOpen] = useState(false);
   const [hover, setHover] = useState(null);
   const [loaded, setLoaded] = useState(null); // { twr, bench } or null while loading
+  const [dims, setDims] = useState({ w: 800, h: 250 });
   const benchRef = useRef(null);
   const wrapRef = useRef(null);
   useClickOutside(benchRef, () => setBenchOpen(false));
@@ -91,7 +92,21 @@ export default function PerformancePage({ transactions = [] }) {
   const benchLabel = BENCHMARKS.find(b => b.ticker === benchmark)?.label ?? benchmark;
 
   // ---- chart geometry (same idiom as ReturnChart) ---------------------------
-  const W = 800, H = 280;
+  // viewBox matches the rendered pixel size (via ResizeObserver) so axis text
+  // renders at its true 11px on any card width — a fixed 800-wide viewBox
+  // stretched across a full-width desktop card blows the font up ~2.2×.
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect;
+      if (width > 0 && height > 0) setDims({ w: width, h: height });
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [loaded]);
+
+  const W = dims.w, H = dims.h;
   const padL = 8, padR = 72, padT = 16, padB = 28;
   const plotW = W - padL - padR;
   const plotH = H - padT - padB;

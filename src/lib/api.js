@@ -548,6 +548,15 @@ export async function fetchPriceHistory(tickers, from, to) {
       gaps.push([fromStr, toStr]);
     } else {
       if (dates[0] > fromStr) gaps.push([fromStr, addDaysYMD(dates[0], -1)]);
+      // Interior holes too — earlier fetches at different ranges can leave the
+      // cache with a filled head and tail but a hole in the middle. >4 days
+      // between consecutive closes is beyond any long weekend, so treat it as
+      // missing data. ponytail: spans Yahoo genuinely has no data for get
+      // re-requested every load; add a negative cache if that ever hurts.
+      for (let i = 1; i < dates.length; i++) {
+        const holeDays = (new Date(`${dates[i]}T00:00:00Z`) - new Date(`${dates[i - 1]}T00:00:00Z`)) / MS_PER_DAY;
+        if (holeDays > 4) gaps.push([addDaysYMD(dates[i - 1], 1), addDaysYMD(dates[i], -1)]);
+      }
       const last = dates[dates.length - 1];
       if (last < toStr) gaps.push([addDaysYMD(last, 1), toStr]);
     }
