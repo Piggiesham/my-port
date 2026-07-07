@@ -211,6 +211,21 @@ export const fmtLive = (usd, cur) => {
 export const fmtCurrencySym = (currency) => (currency === 'THB' ? '฿' : '$');
 export const fmtCurrencyCode = (currency) => (currency === 'THB' ? 'THB' : 'USD');
 
+// ---- Strategy page helpers -------------------------------------------------
+// One stable color per bucket, by its position in the plan — links a bucket
+// across the Rebalance / Suggestions / Research sections.
+export const bucketColorMap = (buckets = []) =>
+  Object.fromEntries(buckets.map((b, i) => [b.id, PALETTE[i % PALETTE.length]]));
+
+const MONTHS_FULL = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+// Turn a fetch filename (answer-2026-07-07T05-21-q2.md) into a readable
+// provenance label; falls back to the raw string if no date is present.
+export const citeLabel = (cite) => {
+  const m = /(\d{4})-(\d{2})-(\d{2})/.exec(cite || '');
+  if (!m) return cite || '';
+  return `NotebookLM · ${Number(m[3])} ${MONTHS_FULL[Number(m[2]) - 1]} ${m[1]}`;
+};
+
 // ----------------------------------------------------------------------------
 // Bangkok-time helpers.
 //

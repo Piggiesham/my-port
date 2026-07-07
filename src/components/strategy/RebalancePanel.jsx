@@ -1,9 +1,10 @@
 import { useContext } from 'react';
-import { CurrencyContext, fmtLive } from '../../data.js';
+import { CurrencyContext, fmtLive, bucketColorMap } from '../../data.js';
 
 export default function RebalancePanel({ strategy, plan }) {
   const cur = useContext(CurrencyContext);
   const { rows, total, totalDriftPct, unassignedTickers } = strategy;
+  const colors = bucketColorMap(plan.buckets);
 
   return (
     <div className="card">
@@ -24,19 +25,25 @@ export default function RebalancePanel({ strategy, plan }) {
       {rows.map(r => {
         const buy = r.tradeUSD >= 0;
         const onTarget = Math.abs(r.tradeUSD) < 0.5;
+        const color = colors[r.id] || 'var(--text-faint)';
+        const actual = Math.min(r.actualPct, 100);
+        const target = Math.min(r.target, 100);
+        const gapLeft = Math.min(actual, target);
+        const gapW = Math.abs(target - actual);
         return (
           <div className="rebal-row" key={r.id}>
             <div className="rebal-label">
-              <span className="rebal-name">{r.name}</span>
+              <span className="rebal-name"><span className="bucket-dot" style={{ background: color }} />{r.name}</span>
               <span className="rebal-target">{r.target}% target</span>
             </div>
-            <div className="rebal-bar">
-              <div className="rebal-bar-target" style={{ width: `${Math.min(r.target, 100)}%` }} />
-              <div className="rebal-bar-actual" style={{ width: `${Math.min(r.actualPct, 100)}%` }} />
+            <div className="rebal-bar" title={`${r.actualPct.toFixed(1)}% now vs ${r.target}% target`}>
+              <div className="rebal-fill" style={{ width: `${actual}%`, background: color }} />
+              {!onTarget && <div className={`rebal-gap ${buy ? 'under' : 'over'}`} style={{ left: `${gapLeft}%`, width: `${gapW}%` }} />}
+              <div className="rebal-tick" style={{ left: `${target}%` }} />
             </div>
             <div className="rebal-figures">
               <span className="rebal-actual">{r.actualPct.toFixed(1)}%</span>
-              <span className={`rebal-trade ${buy ? 'up' : 'down'}`}>
+              <span className={`rebal-trade ${onTarget ? 'flat' : buy ? 'up' : 'down'}`}>
                 {onTarget ? 'on target' : `${buy ? '▲ buy' : '▼ sell'} ${fmtLive(Math.abs(r.tradeUSD), cur)}`}
               </span>
             </div>

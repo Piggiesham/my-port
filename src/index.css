@@ -435,15 +435,20 @@
   color: var(--text-dim); background: rgba(251,191,36,0.10); border: 1px solid rgba(251,191,36,0.25); }
 .rebal-row { display: grid; grid-template-columns: 150px 1fr 160px; gap: 14px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--border); }
 .rebal-label { display: flex; flex-direction: column; gap: 2px; }
-.rebal-name { font-weight: 600; font-size: 14px; }
-.rebal-target { font-size: 12px; color: var(--text-faint); }
-.rebal-bar { position: relative; height: 10px; border-radius: 6px; background: var(--panel-2); overflow: hidden; }
-.rebal-bar-target { position: absolute; inset: 0 auto 0 0; height: 100%; background: var(--border-strong); opacity: 0.6; }
-.rebal-bar-actual { position: absolute; inset: 0 auto 0 0; height: 100%; background: var(--accent); border-radius: 6px; }
+.rebal-name { font-weight: 600; font-size: 14px; display: flex; align-items: center; }
+.rebal-target { font-size: 12px; color: var(--text-faint); margin-left: 16px; }
+.bucket-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; vertical-align: middle; flex-shrink: 0; }
+.rebal-bar { position: relative; height: 10px; border-radius: 999px; background: var(--panel-2); overflow: hidden; }
+.rebal-fill { position: absolute; inset: 0 auto 0 0; height: 100%; }
+.rebal-gap { position: absolute; top: 0; height: 100%; }
+.rebal-gap.under { background: rgba(74, 222, 128, 0.55); }
+.rebal-gap.over { background: rgba(248, 113, 113, 0.6); }
+.rebal-tick { position: absolute; top: 0; width: 2px; height: 100%; margin-left: -1px; background: rgba(255, 255, 255, 0.9); }
 .rebal-figures { display: flex; justify-content: space-between; align-items: center; font-family: 'JetBrains Mono', monospace; font-size: 13px; }
 .rebal-actual { color: var(--text-dim); }
 .rebal-trade.up { color: var(--green); }
 .rebal-trade.down { color: var(--red); }
+.rebal-trade.flat { color: var(--text-faint); }
 @media (max-width: 880px) {
   .rebal-row { grid-template-columns: 1fr; gap: 8px; }
   .rebal-figures { justify-content: flex-start; gap: 16px; }
@@ -466,9 +471,18 @@
 .wb-guard { font-size: 12px; color: var(--red); }
 .wb-commit { margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
 .wb-instruction { font-family: 'JetBrains Mono', monospace; font-size: 12px; background: var(--panel-2); padding: 8px 10px; border-radius: 8px; }
+/* Minimal themed slider: thin accent-filled track + small round thumb. */
+.wb-row input[type="range"] { -webkit-appearance: none; appearance: none; width: 100%; height: 4px; border-radius: 999px; background: linear-gradient(to right, var(--accent) var(--val, 0%), var(--panel-2) var(--val, 0%)); outline: none; cursor: pointer; }
+.wb-row input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 14px; height: 14px; border-radius: 50%; background: var(--text); border: 2px solid var(--panel); box-shadow: 0 1px 3px rgba(0,0,0,0.4); cursor: pointer; }
+.wb-row input[type="range"]::-moz-range-thumb { width: 12px; height: 12px; border: 2px solid var(--panel); border-radius: 50%; background: var(--text); cursor: pointer; }
+.wb-row input[type="range"]::-moz-range-track { height: 4px; border-radius: 999px; background: transparent; }
+.wb-row input[type="range"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+/* Typeable percentage, no spinner arrows. */
+.wb-num::-webkit-outer-spin-button, .wb-num::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.wb-num { -moz-appearance: textfield; appearance: textfield; }
 
 .sugg-row { display: grid; grid-template-columns: 110px 1fr auto; gap: 12px; align-items: start; padding: 12px 0; border-bottom: 1px solid var(--border); }
-.sugg-bucket { font-size: 12px; font-weight: 600; color: var(--text-dim); padding-top: 2px; }
+.sugg-bucket { font-size: 12px; font-weight: 600; color: var(--text-dim); padding-top: 2px; display: inline-flex; align-items: center; }
 .sugg-action { font-size: 14px; font-weight: 500; }
 .sugg-why { font-size: 12px; color: var(--text-faint); margin-top: 3px; line-height: 1.4; }
 .sugg-cite { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--accent); background: var(--panel-2); padding: 3px 7px; border-radius: 6px; white-space: nowrap; }
@@ -476,6 +490,7 @@
 
 .rh-item { border-bottom: 1px solid var(--border); }
 .rh-head { width: 100%; display: flex; justify-content: space-between; align-items: center; padding: 12px 0; background: none; border: none; color: var(--text); cursor: pointer; font-size: 14px; font-weight: 600; }
+.rh-scope { display: inline-flex; align-items: center; }
 .rh-caret { color: var(--text-dim); transition: transform 0.18s; }
 .rh-caret.open { transform: rotate(180deg); }
 .rh-body { padding: 0 0 14px; display: flex; flex-direction: column; gap: 8px; }
