@@ -1,7 +1,10 @@
-import { useState, useMemo, useRef, useEffect } from 'react';
-import { SOURCES, PORTFOLIOS, RANGES } from '../data.js';
+import { useState, useMemo, useRef, useEffect, useContext } from 'react';
+import { SOURCES, PORTFOLIOS, RANGES, CurrencyContext, FX_RATE, fmt2 } from '../data.js';
 import { fetchPriceHistory, computeDailyReturnSeries } from '../lib/api.js';
-import { computeTwrSeries, computeBenchmarkSeries, maxDrawdown, annualizedVolatility } from '../lib/performance.js';
+import {
+  computeTwrSeries, computeBenchmarkSeries, maxDrawdown, annualizedVolatility,
+  modifiedDietz, drawdownStats, computeContribution,
+} from '../lib/performance.js';
 import { supabaseEnabled } from '../lib/supabase.js';
 import { useClickOutside } from '../lib/useClickOutside.js';
 
@@ -21,16 +24,32 @@ const BENCH_COLOR = '#7dd3fc';
 
 const fmtPct = (v, digits = 2) => (v == null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(digits)}%`);
 
+// viewBox-matches-rendered-pixels helper so SVG text renders at true size.
+function useBoxSize(ref, active, fallback = { w: 800, h: 250 }) {
+  const [size, setSize] = useState(fallback);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || !active || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect;
+      if (width > 0 && height > 0) setSize({ w: width, h: height });
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [ref, active]);
+  return size;
+}
+
 export default function PerformancePage({ transactions = [] }) {
   const [portfolio, setPortfolio] = useState('All');
   const [benchmark, setBenchmark] = useState('SPY');
   const [range, setRange] = useState('1Y');
   const [benchOpen, setBenchOpen] = useState(false);
   const [hover, setHover] = useState(null);
-  const [loaded, setLoaded] = useState(null); // { twr, bench } or null while loading
-  const [dims, setDims] = useState({ w: 800, h: 250 });
+  const [loaded, setLoaded] = useState(null); // { twr, bench, mwr, contrib, dd } or null while loading
   const benchRef = useRef(null);
   const wrapRef = useRef(null);
+  const cur = useContext(CurrencyContext);
   useClickOutside(benchRef, () => setBenchOpen(false));
 
   useEffect(() => { setHover(null); }, [portfolio, range, benchmark]);
@@ -67,7 +86,13 @@ export default function PerformancePage({ transactions = [] }) {
       const twr = computeTwrSeries(daily);
       if (twr.length < 2) return;
       const bench = computeBenchmarkSeries(hist.get(benchmark), twr.map(p => p.date));
-      setLoaded({ twr, bench });
+      setLoaded({
+        twr,
+        bench,
+        mwr: modifiedDietz(daily),
+        contrib: computeContribution(filteredTxs, hist, from, to),
+        dd: drawdownStats(twr),
+      });
     }).catch(err => console.warn('[PerformancePage] series failed', err));
 
     return () => { cancelled = true; };
@@ -92,20 +117,10 @@ export default function PerformancePage({ transactions = [] }) {
   const benchLabel = BENCHMARKS.find(b => b.ticker === benchmark)?.label ?? benchmark;
 
   // ---- chart geometry (same idiom as ReturnChart) ---------------------------
-  // viewBox matches the rendered pixel size (via ResizeObserver) so axis text
-  // renders at its true 11px on any card width — a fixed 800-wide viewBox
-  // stretched across a full-width desktop card blows the font up ~2.2×.
-  useEffect(() => {
-    const el = wrapRef.current;
-    if (!el || typeof ResizeObserver === 'undefined') return;
-    const ro = new ResizeObserver(([entry]) => {
-      const { width, height } = entry.contentRect;
-      if (width > 0 && height > 0) setDims({ w: width, h: height });
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [loaded]);
-
+  // viewBox matches the rendered pixel size so axis text renders at its true
+  // 11px on any card width — a fixed 800-wide viewBox stretched across a
+  // full-width desktop card blows the font up ~2.2×.
+  const dims = useBoxSize(wrapRef, !!loaded);
   const W = dims.w, H = dims.h;
   const padL = 8, padR = 72, padT = 16, padB = 28;
   const plotW = W - padL - padR;
@@ -329,6 +344,12 @@ export default function PerformancePage({ transactions = [] }) {
             <div className="num perf-kpi-value" style={{ color: kpis.twr >= 0 ? 'var(--green)' : 'var(--red)' }}>{fmtPct(kpis.twr)}</div>
           </div>
           <div className="card perf-kpi">
+            <div className="perf-kpi-label">MWR (money-weighted)</div>
+            <div className="num perf-kpi-value" style={{ color: loaded.mwr == null ? 'var(--text-dim)' : loaded.mwr >= 0 ? 'var(--green)' : 'var(--red)' }}>
+              {fmtPct(loaded.mwr)}
+            </div>
+          </div>
+          <div className="card perf-kpi">
             <div className="perf-kpi-label">vs {benchLabel}</div>
             <div className="num perf-kpi-value" style={{ color: kpis.delta == null ? 'var(--text-dim)' : kpis.delta >= 0 ? 'var(--green)' : 'var(--red)' }}>
               {kpis.delta == null ? '—' : `${kpis.delta >= 0 ? '+' : ''}${kpis.delta.toFixed(2)} pp`}
@@ -345,7 +366,94 @@ export default function PerformancePage({ transactions = [] }) {
         </div>
       )}
 
+      {!isEmpty && loaded && (
+        <ContributionCard contrib={loaded.contrib} rangeLabel={RANGES[range].label} portfolio={portfolio} cur={cur} />
+      )}
+
+      {!isEmpty && loaded?.dd && (
+        <DrawdownCard dd={loaded.dd} rangeLabel={RANGES[range].label} />
+      )}
+
       <div className="foot">Benchmark is ETF price return — dividends excluded (~1–1.5pp/yr) · Not financial advice</div>
+    </div>
+  );
+}
+
+// Per-asset contribution: bar = pp of portfolio return (proportional to $ by
+// construction, so one fixed sort by impact). 5 rows visible, rest scroll.
+function ContributionCard({ contrib, rangeLabel, portfolio, cur }) {
+  const sym = cur.currency === 'THB' ? '฿' : '$';
+  const fx = cur.currency === 'THB' ? (cur.fxRate || FX_RATE) : 1;
+  const maxAbs = Math.max(...contrib.map(r => Math.abs(r.pp)), 1e-9);
+  return (
+    <div className="card" style={{ marginTop: 20 }}>
+      <div className="card-head">
+        <div>
+          <div className="card-title">Contribution</div>
+          <div className="card-sub">{portfolio === 'All' ? 'All portfolios' : portfolio} · {rangeLabel} · what moved the return</div>
+        </div>
+      </div>
+      {contrib.length === 0 ? (
+        <div style={{ color: 'var(--text-faint)', fontSize: 13, padding: '12px 0' }}>No activity in this range.</div>
+      ) : (
+        <div className="contrib-list">
+          {contrib.map(r => {
+            const upRow = r.gain >= 0;
+            const gainDisp = r.gain * fx;
+            return (
+              <div key={r.ticker} className="contrib-row">
+                <div className="contrib-ticker">{r.ticker}</div>
+                <div className="contrib-bar">
+                  <span style={{ width: `${(Math.abs(r.pp) / maxAbs) * 100}%`, background: upRow ? 'var(--green)' : 'var(--red)' }}></span>
+                </div>
+                <div className="num contrib-pp" style={{ color: upRow ? 'var(--green)' : 'var(--red)' }}>
+                  {`${upRow ? '+' : '−'}${Math.abs(r.pp).toFixed(2)} pp`}
+                </div>
+                <div className="num contrib-gain">{`${upRow ? '+' : '−'}${sym}${fmt2(Math.abs(gainDisp))}`}</div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Underwater chart: how far below the last peak, over the range.
+function DrawdownCard({ dd, rangeLabel }) {
+  const ref = useRef(null);
+  const { w: W, h: H } = useBoxSize(ref, true, { w: 800, h: 120 });
+  const padL = 8, padR = 72, padT = 6, padB = 6;
+  const plotW = W - padL - padR;
+  const plotH = H - padT - padB;
+  const floor = Math.min(dd.worst, -1) * 1.1; // y-domain [floor, 0]
+  const y = v => padT + ((0 - v) / (0 - floor)) * plotH;
+  const t0 = dd.series[0].date.getTime();
+  const tSpan = dd.series[dd.series.length - 1].date.getTime() - t0 || 1;
+  const x = d => padL + ((d.getTime() - t0) / tSpan) * plotW;
+  let path = `M ${padL.toFixed(2)} ${y(0).toFixed(2)} `;
+  for (const p of dd.series) path += `L ${x(p.date).toFixed(2)} ${y(p.dd).toFixed(2)} `;
+  path += `L ${(padL + plotW).toFixed(2)} ${y(0).toFixed(2)} Z`;
+  return (
+    <div className="card" style={{ marginTop: 20 }}>
+      <div className="card-head">
+        <div>
+          <div className="card-title">Drawdown</div>
+          <div className="card-sub">
+            {rangeLabel} · worst {dd.worst.toFixed(2)}%
+            {dd.worst < 0 && ` · ${dd.recoveryDays != null ? `recovered in ${dd.recoveryDays}d` : 'not yet recovered'}`}
+            {` · now ${dd.current.toFixed(2)}%`}
+          </div>
+        </div>
+      </div>
+      <div className="dd-wrap" ref={ref}>
+        <svg className="chart-svg" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
+          <line className="grid-line" x1={padL} x2={padL + plotW} y1={y(0)} y2={y(0)} />
+          <path d={path} fill="rgba(248,113,113,0.18)" stroke="#f87171" strokeWidth="1.5" strokeLinejoin="round" />
+          <text className="axis-label" x={padL + plotW + 8} y={y(0) + 4} textAnchor="start">0%</text>
+          <text className="axis-label" x={padL + plotW + 8} y={y(floor) + 4} textAnchor="start">{floor.toFixed(0)}%</text>
+        </svg>
+      </div>
     </div>
   );
 }
