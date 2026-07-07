@@ -952,7 +952,11 @@ Create `.git/hooks/pre-commit` (or document it if hooks are managed elsewhere):
 ```bash
 #!/bin/sh
 # Block commits that would ship an ungrounded plan.json.
-git diff --cached --name-only | grep -q '^src/data/plan.json$' && node scripts/validate-plan.mjs || exit 0
+# NOTE: use if/then/fi — a `grep && validate || exit 0` one-liner swallows a
+# failing validation (precedence: (A && B) || C), making the guard inert.
+if git diff --cached --name-only | grep -q '^src/data/plan.json$'; then
+  node scripts/validate-plan.mjs || exit 1
+fi
 ```
 
 Run: `chmod +x .git/hooks/pre-commit`
