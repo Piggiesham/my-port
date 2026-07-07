@@ -430,6 +430,14 @@
     .portfolio-tabs button { padding: 7px 10px; font-size: 12px; }
   }
 
+.perf-kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-top: 20px; }
+.perf-kpi { padding: 16px 18px; }
+.perf-kpi-label { font-size: 12px; color: var(--text-dim); margin-bottom: 8px; }
+.perf-kpi-value { font-size: 22px; font-weight: 600; letter-spacing: -0.02em; }
+@media (max-width: 700px) {
+  .perf-kpis { grid-template-columns: repeat(2, 1fr); gap: 12px; }
+}
+
 .strategy-page { display: flex; flex-direction: column; gap: 20px; }
 .strategy-unassigned { margin: 8px 0 4px; padding: 8px 12px; border-radius: 8px; font-size: 12px;
   color: var(--text-dim); background: rgba(251,191,36,0.10); border: 1px solid rgba(251,191,36,0.25); }

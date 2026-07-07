@@ -7,6 +7,7 @@ import PieChart from './components/PieChart.jsx';
 import AssetList from './components/AssetList.jsx';
 import TransactionsPage from './components/TransactionsPage.jsx';
 import StrategyPage from './components/StrategyPage.jsx';
+import PerformancePage from './components/PerformancePage.jsx';
 
 export default function App() {
   const [navTab, setNavTab] = useState('Overview');
@@ -126,7 +127,7 @@ export default function App() {
     return () => document.removeEventListener('mousedown', onClick);
   }, []);
 
-  const navItems = ['Overview', 'Transactions', 'Strategy'];
+  const navItems = ['Overview', 'Transactions', 'Strategy', 'Performance'];
 
   return (
     <CurrencyContext.Provider value={ctx}>
@@ -221,6 +222,7 @@ export default function App() {
           />
         )}
         {navTab === 'Strategy' && <StrategyPage assets={assets} />}
+        {navTab === 'Performance' && <PerformancePage transactions={transactions} />}
       </div>
     </CurrencyContext.Provider>
   );
