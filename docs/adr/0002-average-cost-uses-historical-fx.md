@@ -51,7 +51,7 @@ legible:
   it is approximate. The existing `backfillHistoricalFx()` utility is the
   user's path to remove the marker.
 - For cash positions (USD, THB), the column shows `—` rather than a synthetic
-  number — see CONTEXT.md.
+  number — see ../CONTEXT.md.
 
 ## Consequences
 
@@ -66,7 +66,7 @@ legible:
 - The `~` marker is a soft consistency contract: if a future change ever lets
   buys lose their FX without backfill, the marker shows up automatically. Don't
   silently swallow missing-FX rows (would inflate apparent profit in THB).
-- Combined-ticker rows on the "All" view (see CONTEXT.md → "Combined-ticker
+- Combined-ticker rows on the "All" view (see ../CONTEXT.md → "Combined-ticker
   view") sum each contributing brokerage's `Σ shares · historical-fx · price`
   to produce a portfolio-wide weighted-baht average, marked `~` if any
   contributing buy fell back.

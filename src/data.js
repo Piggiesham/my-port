@@ -16,7 +16,7 @@ export const SOURCES = {
   'Webull':   { color: '#3b82f6', dot: '#1d4ed8' },
   'Binance':  { color: '#f0b90b', dot: '#b8860b' },
   // Sentinel for combined same-ticker rows on the "All" view — see
-  // CONTEXT.md → "Combined-ticker view".
+  // docs/CONTEXT.md → "Combined-ticker view".
   'Multiple': { color: '#71717a', dot: '#52525b' },
 };
 export const PORTFOLIOS = ['All', 'Dime!', 'Webull', 'Binance'];
