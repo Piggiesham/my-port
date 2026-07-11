@@ -218,6 +218,15 @@ export default function AddTransactionModal({ onClose, onAdded, transactions = [
   const types = PORTFOLIO_TYPES[portfolio];
   const placeholderTicker = assetType === 'Crypto' ? 'BTC, ETH, …' : assetType === 'Bond' ? 'CUSIP, ISIN, …' : assetType === 'Cash' ? 'USD, THB, …' : 'Ticker, ISIN, Stock, ETF, …';
 
+  // THB is the active entry currency for cash flows or any other asset type.
+  const isThbEntry = isCashFlow ? depositCcy === 'THB' : entryCcy === 'THB';
+  const [dyy, dmm, ddd] = dateIso.split('-');
+  const dateDisplay = (dyy && dmm && ddd) ? `${ddd}/${dmm}/${dyy}` : dateIso;
+  const fxDisplay = (() => {
+    const n = parseFloat(fxRate);
+    return isFinite(n) && n > 0 ? n.toLocaleString('en-US', { maximumFractionDigits: 4 }) : '—';
+  })();
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()}>
@@ -338,13 +347,23 @@ export default function AddTransactionModal({ onClose, onAdded, transactions = [
           {isCashFlow && (
             <div className="field">
               <label>Currency</label>
-              <div style={{ display: 'flex', gap: 8 }}>
-                {['USD', 'THB'].map(c => (
-                  <button key={c} type="button" onClick={() => setDepositCcy(c)} className="field-input"
-                    style={{ flex: 1, cursor: 'pointer', fontWeight: 600, borderColor: depositCcy === c ? 'var(--accent)' : undefined, color: depositCcy === c ? 'var(--accent)' : 'var(--text)' }}>
-                    {c}
-                  </button>
-                ))}
+              <div style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>
+                <div style={{ display: 'flex', gap: 8, flex: depositCcy === 'THB' ? '0 0 auto' : 1 }}>
+                  {['USD', 'THB'].map(c => (
+                    <button key={c} type="button"
+                      onClick={() => { setDepositCcy(c); if (c === 'THB' && !fxRate) setFxRate(String(FX_RATE)); }}
+                      className="field-input"
+                      style={{ flex: depositCcy === 'THB' ? '0 0 auto' : 1, padding: '0 18px', cursor: 'pointer', fontWeight: 600, borderColor: depositCcy === c ? 'var(--accent)' : undefined, color: depositCcy === c ? 'var(--accent)' : 'var(--text)' }}>
+                      {c}
+                    </button>
+                  ))}
+                </div>
+                {depositCcy === 'THB' && (
+                  <div className="field-with-suffix" style={{ flex: 1 }}>
+                    <input className="field-input" inputMode="decimal" placeholder="THB per USD" value={fxRate} onChange={e => setFxRate(e.target.value)} />
+                    <span className="field-suffix">THB / USD</span>
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -357,6 +376,11 @@ export default function AddTransactionModal({ onClose, onAdded, transactions = [
           <div className="field">
             <label>Transaction Date</label>
             <EditDateField value={dateIso} onChange={setDateIso} />
+            {isThbEntry && (
+              <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 6 }}>
+                FX on {dateDisplay} · {fxDisplay} THB/USD
+              </div>
+            )}
           </div>
 
           {!isCashFlow && (

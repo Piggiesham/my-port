@@ -174,6 +174,7 @@ export function EditDateField({ value, onChange }) {
     <div className="field-with-icon" style={{ position: 'relative' }}>
       <input
         className="field-input"
+        style={{ paddingLeft: 16 }}
         value={display}
         onChange={e => {
           const t = e.target.value.trim();
