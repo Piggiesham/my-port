@@ -90,7 +90,7 @@ Critical Dime! format rules:
 - Buy/Sell: the right side shows a total like "999.86 THB" or "50.00 USD". IGNORE this total. "Executed Price" (e.g. "538.44") is ALWAYS USD per share, even when the total is THB — output it as-is. "currency" is ALWAYS "USD". "qty" comes from the "Shares" line.
 - Cash rows: "value" is the USD number on the right, as a POSITIVE magnitude. Dividends post positive ("Deposit to Dime! USD"); Tax and Fee post negative ("Deduct from Dime! USD") — still output the positive magnitude; the system knows Tax/Fee are outflows.
 - SKIP rows displaying "Cancelled" or "Expired".
-- Dates are shown in Asia/Bangkok. Output them EXACTLY as shown, ISO 8601 with a Z suffix, WITHOUT converting time zones. Example: "28 Feb 2025 - 03:17:45 AM" → "2025-02-28T03:17:45Z".
+- Dates are shown in Asia/Bangkok. Output them EXACTLY as shown, ISO 8601 with a Z suffix, WITHOUT converting time zones. Convert 12-hour clock to 24-hour: AM keeps the hour (12 AM → 00), PM adds 12 to hours 1-11 (12 PM stays 12). Examples: "28 Feb 2025 - 03:17:45 AM" → "2025-02-28T03:17:45Z". "28 Feb 2025 - 11:44:10 PM" → "2025-02-28T23:44:10Z".
 - Month headers (e.g. "February 2025") set the year/month context for rows below until the next header.
 - If a field is unreadable, set it to null. Do not invent values.
 
@@ -148,7 +148,7 @@ For each Buy/Sell row, return one object:
 Rules:
 - The right-hand side shows either a total like "60.00 USD" / "4,999.85 THB" OR a share count like "1 Shares". When it shows a share count, qty equals that number and currency comes from the executed-price context (default USD if no currency shown). When it shows a total, qty comes from the "Shares" row below and currency comes from that total.
 - "Executed Price" is the per-share price.
-- Dates are shown in Asia/Bangkok. Output them EXACTLY as shown, in ISO 8601 with a Z suffix, WITHOUT converting time zones (do NOT add or subtract any hours). Example: "28 Jan 2025 - 07:27:51 AM" → "2025-01-28T07:27:51Z".
+- Dates are shown in Asia/Bangkok. Output them EXACTLY as shown, in ISO 8601 with a Z suffix, WITHOUT converting time zones. Convert 12-hour clock to 24-hour: AM keeps the hour (12 AM → 00), PM adds 12 to hours 1-11 (12 PM stays 12). Examples: "28 Jan 2025 - 07:27:51 AM" → "2025-01-28T07:27:51Z". "28 Jan 2025 - 11:44:10 PM" → "2025-01-28T23:44:10Z".
 - Month headers (e.g. "December 2024", "November 2024") set the year/month context for the rows under them until a new header appears.
 - If a field is unreadable, set it to null. Do not invent values.
 
