@@ -6,8 +6,25 @@ import ReturnChart from './components/ReturnChart.jsx';
 import PieChart from './components/PieChart.jsx';
 import AssetList from './components/AssetList.jsx';
 import TransactionsPage from './components/TransactionsPage.jsx';
-import StrategyPage from './components/StrategyPage.jsx';
 import PerformancePage from './components/PerformancePage.jsx';
+
+// Strategy is under maintenance — its import is intentionally removed above
+// so the page (and its bundle) isn't shipped to production. Restore the
+// import and swap this back to <StrategyPage assets={assets} /> to re-enable.
+function StrategyMaintenance() {
+  return (
+    <div className="empty-tab">
+      <div className="empty-icon">
+        <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+          <path d="M14 3v4M14 21v4M4 14H0M28 14h-4M6.3 6.3l2.8 2.8M18.9 18.9l2.8 2.8M21.7 6.3l-2.8 2.8M9.1 18.9l-2.8 2.8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+          <circle cx="14" cy="14" r="5" stroke="currentColor" strokeWidth="1.5"/>
+        </svg>
+      </div>
+      <div className="empty-title">Strategy is under maintenance</div>
+      <div className="empty-sub">Check back soon.</div>
+    </div>
+  );
+}
 
 export default function App() {
   const [navTab, setNavTab] = useState('Overview');
@@ -221,7 +238,7 @@ export default function App() {
             onTransactionAdded={refreshFromSupabase}
           />
         )}
-        {navTab === 'Strategy' && <StrategyPage assets={assets} />}
+        {navTab === 'Strategy' && <StrategyMaintenance />}
         {navTab === 'Performance' && <PerformancePage transactions={transactions} />}
       </div>
     </CurrencyContext.Provider>
