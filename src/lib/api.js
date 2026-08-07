@@ -260,13 +260,13 @@ export function computeSharesHeld(transactions, brokerage, ticker) {
 }
 
 // Per (source, ticker) historical-FX cost basis in THB. Replays Buys with each
-// one's fx_rate_at_tx so the resulting weighted avg reflects the baht the user
-// actually paid — see docs/adr/0002-average-cost-uses-historical-fx.md.
-// Sells reduce qty but not the per-share THB cost (mirrors apply_holdings_delta
-// avg-cost semantics). A Buy missing fx_rate_at_tx marks the position as
-// `approx: true` and uses today's FX_RATE for that one buy — the cell renders
-// with a "~" prefix until backfillHistoricalFx() runs.
-// Returns Map<"source|ticker", { qty, thbCostTotal, thbPerShare, approx }>.
+// one's fx_rate_at_tx, keeping one FIFO lot per buy so a Sell consumes the
+// oldest baht-cost lots first (matches how brokers report cost basis) — see
+// docs/adr/0002-average-cost-uses-historical-fx.md for why FX is historical.
+// A Buy missing fx_rate_at_tx marks the position as `approx: true` and uses
+// today's FX_RATE for that one buy — the cell renders with a "~" prefix until
+// backfillHistoricalFx() runs.
+// Returns Map<"source|ticker", { qty, thbPerShare, approx }>.
 export function computeThbCostByKey(transactions) {
   const out = new Map();
   const sorted = [...(transactions || [])].sort(
@@ -278,7 +278,7 @@ export function computeThbCostByKey(transactions) {
     const tk = (t.ticker || '').toUpperCase();
     if (!tk) continue;
     const key = `${t.source}|${tk}`;
-    const cur = out.get(key) || { qty: 0, thbCostTotal: 0, approx: false };
+    const cur = out.get(key) || { qty: 0, lots: [], approx: false };
     const shares = Number(t.shares) || 0;
     if (shares <= 0) { out.set(key, cur); continue; }
 
@@ -287,21 +287,27 @@ export function computeThbCostByKey(transactions) {
       let fx = Number(t.fx_rate_at_tx);
       let approxThis = false;
       if (!fx || fx <= 0) { fx = MOCK_FX_RATE; approxThis = true; }
+      cur.lots.push({ qty: shares, thbPerShare: priceUsd * fx });
       cur.qty += shares;
-      cur.thbCostTotal += shares * priceUsd * fx;             // baht paid for these shares
       if (approxThis) cur.approx = true;
     } else if (action === 'Sell') {
-      // Per-share THB avg cost is preserved across sells; reduce qty and basis
-      // proportionally so thbPerShare stays the same.
-      const perShare = cur.qty > 0 ? cur.thbCostTotal / cur.qty : 0;
+      // FIFO: consume the oldest lots first.
+      let remaining = shares;
+      while (remaining > 1e-9 && cur.lots.length > 0) {
+        const lot = cur.lots[0];
+        const take = Math.min(lot.qty, remaining);
+        lot.qty -= take;
+        remaining -= take;
+        if (lot.qty <= 1e-9) cur.lots.shift();
+      }
       cur.qty = Math.max(0, cur.qty - shares);
-      cur.thbCostTotal = cur.qty * perShare;
-      if (cur.qty === 0) cur.approx = false;                  // fresh start if reopened
+      if (cur.qty <= 1e-9) { cur.qty = 0; cur.lots = []; cur.approx = false; }  // fresh start if reopened
     }
     out.set(key, cur);
   }
   for (const [k, v] of out) {
-    v.thbPerShare = v.qty > 0 ? v.thbCostTotal / v.qty : 0;
+    const thbCostTotal = v.lots.reduce((s, l) => s + l.qty * l.thbPerShare, 0);
+    v.thbPerShare = v.qty > 0 ? thbCostTotal / v.qty : 0;
     out.set(k, v);
   }
   return out;
@@ -339,10 +345,11 @@ export function computeCashBalance(transactions, brokerage, currency, catalog = 
 
 export function computeAssetsFromTransactions(transactions, catalog, priceMap) {
   const sorted = [...transactions].sort((a, b) => new Date(a.date) - new Date(b.date));
-  const positions = new Map(); // key = `${source}|${ticker}` → { qty, cost }
+  const positions = new Map(); // key = `${source}|${ticker}` → { qty, cost, lots }
   const settlementByTicker = Object.fromEntries(
     (catalog || []).map(a => [a.ticker, a.settlement_currency || (a.is_cash ? a.ticker : 'USD')])
   );
+  const catalogByTicker = Object.fromEntries((catalog ?? []).map(a => [a.ticker, a]));
 
   const mutateCash = (source, currency, delta) => {
     const key = `${source}|${currency}`;
@@ -354,23 +361,45 @@ export function computeAssetsFromTransactions(transactions, catalog, priceMap) {
 
   for (const t of sorted) {
     const key = `${t.source}|${t.ticker}`;
-    const cur = positions.get(key) || { qty: 0, cost: 0 };
+    const cur = positions.get(key) || { qty: 0, cost: 0, lots: [] };
     const shares = Number(t.shares ?? 0);
     const price = Number(t.price ?? 0);
     const fees = Number(t.fees) || 0;
     const taxes = Number(t.taxes) || 0;
     const value = Number(t.valueUSD) || 0;
+    // Cash (USD/THB) keeps a blended historical-FX average — there's no
+    // "lot" for currency. Securities use FIFO so avg cost matches what the
+    // broker reports: a Sell consumes the oldest, not the average, shares.
+    const isCash = !!catalogByTicker[t.ticker]?.is_cash;
 
     if (t.action === 'Buy' || t.action === 'Deposit') {
       const newQty = cur.qty + shares;
-      if (newQty === 0) { cur.qty = 0; cur.cost = 0; }
-      else {
+      if (newQty === 0) { cur.qty = 0; cur.cost = 0; cur.lots = []; }
+      else if (isCash) {
         cur.cost = ((cur.qty * cur.cost) + (shares * price)) / newQty;
         cur.qty = newQty;
+      } else {
+        if (shares > 0) cur.lots.push({ qty: shares, price });
+        cur.qty = newQty;
+        cur.cost = cur.lots.reduce((s, l) => s + l.qty * l.price, 0) / cur.qty;
       }
     } else if (t.action === 'Sell' || t.action === 'Withdraw') {
-      cur.qty = cur.qty - shares;
-      if (cur.qty <= 0) { cur.qty = 0; cur.cost = 0; }
+      if (isCash) {
+        cur.qty = cur.qty - shares;
+        if (cur.qty <= 0) { cur.qty = 0; cur.cost = 0; }
+      } else {
+        let remaining = shares;
+        while (remaining > 1e-9 && cur.lots.length > 0) {
+          const lot = cur.lots[0];
+          const take = Math.min(lot.qty, remaining);
+          lot.qty -= take;
+          remaining -= take;
+          if (lot.qty <= 1e-9) cur.lots.shift();
+        }
+        cur.qty = Math.max(0, cur.qty - shares);
+        if (cur.qty <= 1e-9) { cur.qty = 0; cur.lots = []; cur.cost = 0; }
+        else cur.cost = cur.lots.reduce((s, l) => s + l.qty * l.price, 0) / cur.qty;
+      }
     }
     positions.set(key, cur);
 
@@ -388,7 +417,6 @@ export function computeAssetsFromTransactions(transactions, catalog, priceMap) {
     }
   }
 
-  const catalogByTicker = Object.fromEntries((catalog ?? []).map(a => [a.ticker, a]));
   const out = [];
   for (const [key, { qty, cost }] of positions) {
     if (qty <= 0.00000001) continue;
