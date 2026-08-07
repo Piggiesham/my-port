@@ -96,7 +96,7 @@ export default function TransactionsPage({ transactions = MOCK_TRANSACTIONS, ass
     let cur = null;
     for (const t of items) {
       const d = new Date(t.date);
-      const k = d.toLocaleString('en-US', { month: 'long', year: 'numeric', timeZone: 'Asia/Bangkok' });
+      const k = d.toLocaleString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
       if (!cur || cur.key !== k) {
         cur = { key: k, items: [] };
         groups.push(cur);
