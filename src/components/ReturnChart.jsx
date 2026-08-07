@@ -11,6 +11,7 @@ export default function ReturnChart({ portfolio = 'All', totalNow, transactions 
   const [range, setRange] = useState('1Y');
   const [hover, setHover] = useState(null);
   const [daily, setDaily] = useState(null);
+  const [dailyLoading, setDailyLoading] = useState(false);
   const [mode, setMode] = useState(() => {
     try {
       const saved = typeof localStorage !== 'undefined' && localStorage.getItem(MODE_KEY);
@@ -34,6 +35,7 @@ export default function ReturnChart({ portfolio = 'All', totalNow, transactions 
   useEffect(() => {
     if (!supabaseEnabled || !transactions || transactions.length === 0) {
       setDaily(null);
+      setDailyLoading(false);
       return;
     }
     let cancelled = false;
@@ -50,11 +52,13 @@ export default function ReturnChart({ portfolio = 'All', totalNow, transactions 
     const tickers = [...new Set([...transactions.map(t => t.ticker).filter(Boolean), 'THB'])];
 
     setDaily(null);
+    setDailyLoading(true);
     fetchPriceHistory(tickers, from, to).then(priceHist => {
       if (cancelled) return;
       const built = computeDailyReturnSeries(transactions, priceHist, from, to);
       if (built.length >= 2) setDaily(built);
-    }).catch(err => console.warn('[ReturnChart] daily series failed', err));
+    }).catch(err => console.warn('[ReturnChart] daily series failed', err))
+      .finally(() => { if (!cancelled) setDailyLoading(false); });
 
     return () => { cancelled = true; };
   }, [transactions, range]);
@@ -301,6 +305,27 @@ export default function ReturnChart({ portfolio = 'All', totalNow, transactions 
             <div style={{ fontSize: 14, color: 'var(--text-dim)', marginBottom: 6 }}>No data yet</div>
             <div>Add a transaction to start tracking returns.</div>
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (dailyLoading && !daily) {
+    return (
+      <div className="card chart-card">
+        <div className="card-head">
+          <div>
+            <div className="card-title">{isPerf ? 'Portfolio Return' : 'Portfolio Value'}</div>
+            <div className="card-sub">{portfolio === 'All' ? 'All portfolios' : portfolio} · {RANGES[range].label}</div>
+          </div>
+          <div className="ranges">
+            {Object.keys(RANGES).map(r => (
+              <button key={r} className={r === range ? 'active' : ''} onClick={() => { setRange(r); setHover(null); }}>{r}</button>
+            ))}
+          </div>
+        </div>
+        <div style={{ display: 'grid', placeItems: 'center', height: 280, color: 'var(--text-faint)', fontSize: 13 }}>
+          Loading price history…
         </div>
       </div>
     );
