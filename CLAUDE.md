@@ -3,10 +3,10 @@
 ## Docs — read before you touch related code
 - `docs/DESIGN.md` — the design system (tokens, type/spacing scales, component idioms, responsive rules, semantic conventions). **Read before building or restyling any UI** so new work stays visually consistent.
 - `docs/CONTEXT.md` — domain model + terminology + the reasoning behind the money/return logic. **Read before changing return math, cost basis, FX, or cash handling.**
-- `docs/adr/` — accepted architecture decisions (0001 fee/tax actions, 0002 avg-cost historical FX, 0003 return vs invested capital). Consult when a decision seems arbitrary; add a new ADR rather than silently reversing one.
+- `docs/adr/` — accepted architecture decisions (0001 fee/tax actions, 0002 avg-cost historical FX, 0003 return vs invested capital, 0004 avg-cost FIFO for securities). Consult when a decision seems arbitrary; add a new ADR rather than silently reversing one.
 
 ## File map
-- `src/App.jsx` — root; fetches all data on mount, owns `CurrencyContext`, routes between 4 pages (Overview, Transactions, Strategy, Performance)
+- `src/App.jsx` — root; fetches all data on mount, owns `CurrencyContext`; routes Overview/Transactions/Strategy/Performance. Strategy currently renders an inline maintenance placeholder — its import is commented out so the bundle tree-shakes it out of prod; the comment there says how to re-enable.
 - `src/data.js` — mock fallback data + shared formatters (`fmtCurrency`, `fmtDateBkk`, etc.) + `SOURCES`, `PORTFOLIOS`, `PORTFOLIO_TYPES`
 - `src/lib/api.js` — all Supabase reads/writes; falls back to mock data when `supabaseEnabled` is false
 - `src/lib/supabase.js` — Supabase client + `supabaseEnabled` flag
@@ -23,8 +23,8 @@
 - `src/components/DateField.jsx` — `EditDateField` (DD/MM/YYYY input + calendar button, speaks ISO strings) + `DatePopover` (the calendar). Shared by both modals
 - `src/components/AssetSearchInput.jsx` — `AssetSearchInput`: ticker typeahead (local catalog + Yahoo search + manual create); owns `createAsset`/`searchYahooSymbols`
 - `src/components/TransactionDetailModal.jsx` — view / edit / delete a transaction (includes `EditTransactionForm`); imports `CurrencySuffix`/`EditDateField`
-- `src/components/ImportModal.jsx` — import flow: Dime! screenshots + Webull statement PDFs → Gemini edge fn (`parse-transactions-image`) → parsed rows → atomic bulk import
-- `src/components/StrategyPage.jsx` — Strategy page; mounts `strategy/` panels (`AllocationWorkbench`, `RebalancePanel`, `SuggestionsPanel`, `ResearchHub`); reads `plan.json`
+- `src/components/ImportModal.jsx` — import flow: Dime! screenshots + Webull statement PDFs → `parse-transactions-image` edge fn (PDFs always Gemini; images follow live `LLM_PROVIDER` secret, currently Groq/Qwen) → parsed rows → atomic bulk import
+- `src/components/StrategyPage.jsx` — Strategy page (dormant — not imported by App.jsx, see above); mounts `strategy/` panels (`AllocationWorkbench`, `RebalancePanel`, `SuggestionsPanel`, `ResearchHub`); reads `plan.json`
 - `src/components/PerformancePage.jsx` — Performance page: TWR vs USD-ETF benchmark chart + KPI tiles (TWR/MWR/drawdown/vol) + per-asset contribution
 
 ## Key conventions
@@ -33,6 +33,7 @@
 - **Brokerage IDs**: DB uses `dime` / `webull` / `binance`; UI shows `Dime!` / `Webull` / `Binance` — mapping is in `api.js`
 - **THB cash**: stored as qty in baht; a Deposit's price is the USD-per-THB rate on its transaction date (historical FX) so cost basis reflects the baht actually exchanged, while current value uses live FX. (`AddTransactionModal` sets this; older rows used the constant `1/FX_RATE`.)
 - **Return**: measured against **invested capital** (net deposits), not cost basis; period return excludes in-period cash flows — see ADR 0003 and `docs/CONTEXT.md`. `invested`/`investedThb` in `computeReturnSeries`/`computeDailyReturnSeries` are net deposits, not `Σ qty·cost`.
+- **Avg cost is FIFO for securities, weighted-average for cash**: a Sell consumes the oldest lot first (matches broker-reported cost basis), so avg cost changes after a partial sell — see ADR 0004. `computeAssetsFromTransactions`/`computeThbCostByKey` in `api.js`; the SQL `holdings.cost_basis` cache is still weighted-average but unread (`fetchAssets()` is dead code).
 - **Ledger is source of truth**: `transactions` is authoritative; `holdings` is a derived cache (the Overview recomputes from transactions in JS). Cash assets `USD`/`THB` must exist in `assets` or cash Deposits fail the FK (seeded in migration 013); resync the cache with `rebuild_holdings()` (migration 015).
 - **Bangkok time**: all dates display in `Asia/Bangkok`; helpers `fmtDateBkk`, `bkkNowParts`, `utcIsoToBkkParts`, `bkkPartsToUtcIso` are in `data.js`
 
