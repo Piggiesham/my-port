@@ -390,6 +390,27 @@ export default function ImportModal({ onClose, onDone, transactions = [] }) {
     await runImport(trades, preflight.deposits);
   };
 
+  // Per-brokerage "where did I leave off" summary for the first step: the most
+  // recent transaction date, when rows were last imported, and how stale that is.
+  // executed_at is stored as Bangkok wall-clock, so staleness is measured
+  // against the Bangkok "now" (same convention as the rest of the app).
+  const lastImported = useMemo(() => {
+    const out = {};
+    const bkkNowMs = Date.now() + 7 * 3600_000;
+    for (const t of transactions || []) {
+      if (!t.source || !t.date) continue;
+      const o = out[t.source] || (out[t.source] = { lastTx: 0, lastImportAt: 0 });
+      const d = new Date(t.date).getTime();
+      if (d > o.lastTx) o.lastTx = d;
+      const c = t.createdAt ? new Date(t.createdAt).getTime() : 0;
+      if (c > o.lastImportAt) o.lastImportAt = c;
+    }
+    for (const o of Object.values(out)) {
+      o.daysSinceTx = Math.floor((bkkNowMs - o.lastTx) / 86_400_000);
+    }
+    return out;
+  }, [transactions]);
+
   // ---- Step renderers -------------------------------------------------------
   const renderBrokerage = () => (
     <div className="modal-body">
@@ -411,6 +432,24 @@ export default function ImportModal({ onClose, onDone, transactions = [] }) {
             <span className="pc-info">
               <span className="pc-name">{b.id}</span>
               <span className="pc-sub">{b.enabled ? `${PORTFOLIO_TYPES[b.id].join(' · ')} · ${b.hint}` : b.hint}</span>
+              {b.enabled && (() => {
+                const li = lastImported[b.id];
+                if (!li || !li.lastTx) return <span className="pc-sub">No transactions yet</span>;
+                const stale = li.daysSinceTx > 35;
+                return (
+                  <>
+                    <span className="pc-sub">
+                      Latest transaction {fmtDateBkk(li.lastTx)}
+                      {li.lastImportAt > 0 && <> · last import {fmtDateBkk(li.lastImportAt + 7 * 3600_000)}</>}
+                    </span>
+                    {stale && (
+                      <span className="pc-sub" style={{ color: 'var(--text-dim)', fontWeight: 600 }}>
+                        Nothing new in {li.daysSinceTx} days — check for a newer {b.id === 'Webull' ? 'statement' : 'screenshots'}
+                      </span>
+                    )}
+                  </>
+                );
+              })()}
             </span>
             <svg className="pc-arrow" width="18" height="18" viewBox="0 0 18 18" fill="none">
               <path d="M6 4l5 5-5 5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>

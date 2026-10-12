@@ -97,13 +97,14 @@ export async function fetchTransactions() {
 
   const { data, error } = await supabase
     .from('transactions')
-    .select('id, brokerage_id, ticker, action, shares, price, value_usd, fees, taxes, description, executed_at, fx_rate_at_tx')
+    .select('id, brokerage_id, ticker, action, shares, price, value_usd, fees, taxes, description, executed_at, created_at, fx_rate_at_tx')
     .order('executed_at', { ascending: false });
   if (error) throw error;
 
   return (data ?? []).map(t => ({
     id: t.id,
     date: t.executed_at,
+    createdAt: t.created_at ?? null,
     action: t.action,
     ticker: t.ticker,
     shares: t.shares == null ? null : Number(t.shares),
