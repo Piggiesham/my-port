@@ -10,3 +10,7 @@ dist
 notebooklm/.config
 notebooklm/last-run.json
 .env.notebooklm
+
+# Scratch docs, not meant for GitHub (docs/CONTEXT.md, DESIGN.md, adr/ stay tracked)
+docs/*.html
+docs/handoff-ba.md

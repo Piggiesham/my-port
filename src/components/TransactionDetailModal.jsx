@@ -182,7 +182,9 @@ function EditTransactionForm({ tx, onCancel, onSaved }) {
   const toUsd = (v, ccy) => (ccy === 'THB' ? v / fxNum : v);
 
   useEffect(() => {
-    if (!date) return;
+    // Opening the form must not replace the stored (possibly hand-entered)
+    // rate; only a date the user actually changed re-prefills from market FX.
+    if (!date || date === initialBkk.date) return;
     let cancelled = false;
     const timer = setTimeout(() => {
       fetchHistoricalPrice('THB', date).then(p => {
@@ -191,7 +193,7 @@ function EditTransactionForm({ tx, onCancel, onSaved }) {
       }).catch(() => {});
     }, 300);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [date]);
+  }, [date]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const convertValue = (raw, fromCcy, toCcy) => {
     if (raw === '' || fromCcy === toCcy) return raw;
@@ -272,7 +274,7 @@ function EditTransactionForm({ tx, onCancel, onSaved }) {
                   </button>
                 ))}
               </div>
-              {entryCcy === 'THB' && (
+              {(entryCcy === 'THB' || action === 'Deposit') && (
                 <div className="field-with-suffix" style={{ flex: 1 }}>
                   <input className="field-input" inputMode="decimal" placeholder="THB per USD" value={fxRate} onChange={e => setFxRate(e.target.value)} />
                   <span className="field-suffix">THB / USD</span>

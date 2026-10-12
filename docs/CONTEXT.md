@@ -12,6 +12,12 @@ reconstructed by replaying every cash-affecting transaction in chronological
 order. Invariant: it must never go negative at any point in time. A negative dip
 is the symptom the user calls an **insufficient-funds error**.
 
+### USD-only ledger
+Every cash row is denominated in USD. A baht deposit or withdrawal is converted
+at entry using the THB-per-USD rate for its date (user-overridable) and stored as
+a USD row that keeps the rate in `fx_rate_at_tx`. There is no separate baht cash
+position. See ADR 0005.
+
 ### Cash movement
 Any transaction that changes a cash position. Includes Buy and Sell (their net
 proceeds), Dividend, Deposit, Withdraw, and the fees/taxes attached to a trade.
@@ -43,8 +49,7 @@ a transaction at all — must be excluded from any import.
 ### Combined-ticker view
 The portfolio-wide ("All") rendering of holdings on the Overview, in which rows
 for the same ticker held at multiple brokerages are merged into a single line.
-Same-ticker only — different cash currencies (e.g. USD and THB) stay distinct
-rows because their per-unit meaning differs. A per-brokerage view never
+Same-ticker only. A per-brokerage view never
 combines, because each brokerage holds at most one row per ticker.
 
 On a combined row:
@@ -56,8 +61,8 @@ On a combined row:
 
 ### Invested capital
 The net money the user has actually put in: cumulative **Deposits** minus
-**Withdrawals**. In THB it is locked at each deposit's exchange rate (the baht
-actually exchanged), not revalued at today's FX. This is the baseline **return**
+**Withdrawals**. In THB it is locked at each deposit's exchange rate
+(`fx_rate_at_tx`, the baht actually exchanged), not revalued at today's FX. This is the baseline **return**
 is measured against. It is **not** the same as **cost basis**: realized gains
 and dividends that sit as cash count toward portfolio value but not toward
 invested capital, so they surface as return.

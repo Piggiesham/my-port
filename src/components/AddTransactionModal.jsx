@@ -152,8 +152,9 @@ export default function AddTransactionModal({ onClose, onAdded, transactions = [
     ? totalAmount
     : (entryCcy === 'THB' ? totalAmount * fxNum : totalAmount);
 
+  // Cash lives in USD only (ADR 0005); a baht flow is converted at entry.
   const settlementCurrency = isCashFlow
-    ? depositCcy
+    ? 'USD'
     : (catalog.find(a => a.ticker === (ticker || '').toUpperCase().trim())?.settlement_currency || 'USD');
   const availableCash = useMemo(
     () => portfolio ? computeCashBalance(transactions, portfolio, settlementCurrency, catalog) : 0,
@@ -163,14 +164,14 @@ export default function AddTransactionModal({ onClose, onAdded, transactions = [
     const amt = parseFloat(qty) || 0;
     if (isCashFlow) {
       if (txType !== 'Withdraw') return 0;
-      return amt;
+      return depositCcy === 'THB' ? amt / fxNum : amt;
     }
     if (txType !== 'Buy') return 0;
     const prUsd = toUsd(parseFloat(price) || 0, priceCcy);
     const fUsd  = toUsd(parseFloat(fees)  || 0, feesCcy);
     const tUsd  = toUsd(parseFloat(taxes) || 0, taxesCcy);
     return amt * prUsd + fUsd + tUsd;
-  }, [isCashFlow, txType, qty, price, fees, taxes, priceCcy, feesCcy, taxesCcy, fxNum]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isCashFlow, txType, qty, price, fees, taxes, priceCcy, feesCcy, taxesCcy, depositCcy, fxNum]); // eslint-disable-line react-hooks/exhaustive-deps
   const cashShortfall = cashDebit > availableCash + 0.000001;
 
   const sellTickerKey = (!isCashFlow && ticker ? ticker.toUpperCase().trim() : '');
@@ -220,6 +221,10 @@ export default function AddTransactionModal({ onClose, onAdded, transactions = [
 
   // THB is the active entry currency for cash flows or any other asset type.
   const isThbEntry = isCashFlow ? depositCcy === 'THB' : entryCcy === 'THB';
+  // A Deposit always carries a THB-per-USD rate (editable) so the baht actually
+  // paid is recorded, whichever currency the amount is typed in. Withdrawals
+  // only expose it for a THB amount.
+  const showDepositFx = isCashFlow && (depositCcy === 'THB' || txType === 'Deposit');
   const [dyy, dmm, ddd] = dateIso.split('-');
   const dateDisplay = (dyy && dmm && ddd) ? `${ddd}/${dmm}/${dyy}` : dateIso;
   const fxDisplay = (() => {
@@ -348,17 +353,17 @@ export default function AddTransactionModal({ onClose, onAdded, transactions = [
             <div className="field">
               <label>Currency</label>
               <div style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>
-                <div style={{ display: 'flex', gap: 8, flex: depositCcy === 'THB' ? '0 0 auto' : 1 }}>
+                <div style={{ display: 'flex', gap: 8, flex: showDepositFx ? '0 0 auto' : 1 }}>
                   {['USD', 'THB'].map(c => (
                     <button key={c} type="button"
                       onClick={() => { setDepositCcy(c); if (c === 'THB' && !fxRate) setFxRate(String(FX_RATE)); }}
                       className="field-input"
-                      style={{ flex: depositCcy === 'THB' ? '0 0 auto' : 1, padding: '0 18px', cursor: 'pointer', fontWeight: 600, borderColor: depositCcy === c ? 'var(--accent)' : undefined, color: depositCcy === c ? 'var(--accent)' : 'var(--text)' }}>
+                      style={{ flex: showDepositFx ? '0 0 auto' : 1, padding: '0 18px', cursor: 'pointer', fontWeight: 600, borderColor: depositCcy === c ? 'var(--accent)' : undefined, color: depositCcy === c ? 'var(--accent)' : 'var(--text)' }}>
                       {c}
                     </button>
                   ))}
                 </div>
-                {depositCcy === 'THB' && (
+                {showDepositFx && (
                   <div className="field-with-suffix" style={{ flex: 1 }}>
                     <input className="field-input" inputMode="decimal" placeholder="THB per USD" value={fxRate} onChange={e => setFxRate(e.target.value)} />
                     <span className="field-suffix">THB / USD</span>
@@ -376,9 +381,15 @@ export default function AddTransactionModal({ onClose, onAdded, transactions = [
           <div className="field">
             <label>Transaction Date</label>
             <EditDateField value={dateIso} onChange={setDateIso} />
-            {isThbEntry && (
+            {(isThbEntry || showDepositFx) && (
               <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 6 }}>
                 FX on {dateDisplay} · {fxDisplay} THB/USD
+                {isCashFlow && totalAmount > 0 && depositCcy === 'THB' && (
+                  <> · recorded as ${fmt2(totalAmount / fxNum)} USD</>
+                )}
+                {isCashFlow && totalAmount > 0 && depositCcy === 'USD' && showDepositFx && (
+                  <> · ≈ ฿{fmt2(totalAmount * fxNum)} THB</>
+                )}
               </div>
             )}
           </div>
@@ -462,22 +473,24 @@ export default function AddTransactionModal({ onClose, onAdded, transactions = [
                 try {
                   const executedAt = bkkPartsToUtcIso(dateIso, time);
                   const amount = parseFloat(qty) || 0;
-                  const submitTicker = isCashFlow ? depositCcy : ticker.toUpperCase().trim();
+                  // The ledger is USD-only (ADR 0005): a baht cash flow is converted
+                  // here at the (editable) THB-per-USD rate and stored as a USD
+                  // row; the rate is kept in fx_rate_at_tx so the baht actually
+                  // exchanged stays recoverable for the THB views.
+                  const submitTicker = isCashFlow ? 'USD' : ticker.toUpperCase().trim();
                   const fx = parseFloat(fxRate) || FX_RATE;
-                  // THB cash stores price as USD-per-THB at the tx-date FX, so its
-                  // cost basis is the baht-value-in-USD you actually deposited
-                  // (not 1:1). USD cash is 1. fx here is the transaction-date rate.
+                  const cashUsd = depositCcy === 'THB' ? amount / fx : amount;
                   const priceUsd = isCashFlow
-                    ? (depositCcy === 'THB' ? 1 / fx : 1)
+                    ? 1
                     : (price === '' ? null : toUsd(parseFloat(price) || 0, priceCcy));
                   const feesUsd  = isCashFlow ? (parseFloat(fees) || 0) : toUsd(parseFloat(fees) || 0, feesCcy);
                   const taxesUsd = isCashFlow ? (parseFloat(taxes) || 0) : toUsd(parseFloat(taxes) || 0, taxesCcy);
                   const submitValueUsd = isCashFlow
-                    ? (depositCcy === 'THB' ? amount / fx : amount)
+                    ? cashUsd
                     : (totalAmount || (amount * (priceUsd || 0)) || 0);
                   await addTransaction({
                     portfolio, ticker: submitTicker, action: txType,
-                    shares: amount || null, price: priceUsd, valueUsd: submitValueUsd,
+                    shares: isCashFlow ? (cashUsd || null) : (amount || null), price: priceUsd, valueUsd: submitValueUsd,
                     fees: feesUsd, taxes: taxesUsd, description, executedAt, fxRateAtTx: fx,
                   });
                   onAdded?.();

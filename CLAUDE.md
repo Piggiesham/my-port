@@ -3,7 +3,7 @@
 ## Docs — read before you touch related code
 - `docs/DESIGN.md` — the design system (tokens, type/spacing scales, component idioms, responsive rules, semantic conventions). **Read before building or restyling any UI** so new work stays visually consistent.
 - `docs/CONTEXT.md` — domain model + terminology + the reasoning behind the money/return logic. **Read before changing return math, cost basis, FX, or cash handling.**
-- `docs/adr/` — accepted architecture decisions (0001 fee/tax actions, 0002 avg-cost historical FX, 0003 return vs invested capital, 0004 avg-cost FIFO for securities). Consult when a decision seems arbitrary; add a new ADR rather than silently reversing one.
+- `docs/adr/` — accepted architecture decisions (0001 fee/tax actions, 0002 avg-cost historical FX, 0003 return vs invested capital, 0004 avg-cost FIFO for securities, 0005 USD-only ledger). Consult when a decision seems arbitrary; add a new ADR rather than silently reversing one.
 
 ## File map
 - `src/App.jsx` — root; fetches all data on mount, owns `CurrencyContext`; routes Overview/Transactions/Strategy/Performance. Strategy currently renders an inline maintenance placeholder — its import is commented out so the bundle tree-shakes it out of prod; the comment there says how to re-enable.
@@ -31,7 +31,7 @@
 - **USD canonical**: all values stored/computed in USD; multiply by `fxRate` from `CurrencyContext` only at render time
 - **Supabase gating**: every API call checks `supabaseEnabled`; the mock data path must always keep working
 - **Brokerage IDs**: DB uses `dime` / `webull` / `binance`; UI shows `Dime!` / `Webull` / `Binance` — mapping is in `api.js`
-- **THB cash**: stored as qty in baht; a Deposit's price is the USD-per-THB rate on its transaction date (historical FX) so cost basis reflects the baht actually exchanged, while current value uses live FX. (`AddTransactionModal` sets this; older rows used the constant `1/FX_RATE`.)
+- **Ledger is USD-only**: a baht deposit/withdrawal is converted at entry (rate prefilled by date, editable) and stored as a **USD** row with `fx_rate_at_tx` = THB-per-USD, so the baht actually exchanged stays recoverable (`shares × fx_rate_at_tx`). There is no THB cash holding — see ADR 0005. (Statement-import deposits already worked this way; migration 016 converted older `THB`-ticker rows.)
 - **Return**: measured against **invested capital** (net deposits), not cost basis; period return excludes in-period cash flows — see ADR 0003 and `docs/CONTEXT.md`. `invested`/`investedThb` in `computeReturnSeries`/`computeDailyReturnSeries` are net deposits, not `Σ qty·cost`.
 - **Avg cost is FIFO for securities, weighted-average for cash**: a Sell consumes the oldest lot first (matches broker-reported cost basis), so avg cost changes after a partial sell — see ADR 0004. `computeAssetsFromTransactions`/`computeThbCostByKey` in `api.js`; the SQL `holdings.cost_basis` cache is still weighted-average but unread (`fetchAssets()` is dead code).
 - **Ledger is source of truth**: `transactions` is authoritative; `holdings` is a derived cache (the Overview recomputes from transactions in JS). Cash assets `USD`/`THB` must exist in `assets` or cash Deposits fail the FK (seeded in migration 013); resync the cache with `rebuild_holdings()` (migration 015).
