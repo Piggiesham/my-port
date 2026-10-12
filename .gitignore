@@ -14,3 +14,6 @@ notebooklm/last-run.json
 # Scratch docs, not meant for GitHub (docs/CONTEXT.md, DESIGN.md, adr/ stay tracked)
 docs/*.html
 docs/handoff-ba.md
+
+# Real broker statements/screenshots (personal financial data)
+Transactions/
