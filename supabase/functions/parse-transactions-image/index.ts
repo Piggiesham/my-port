@@ -16,7 +16,9 @@
 // NOTE: Groq deprecates vision models periodically (see
 // https://console.groq.com/docs/deprecations). meta-llama/llama-4-scout-17b-16e-instruct
 // was retired 2026-06-17; this defaults to qwen/qwen3.8-27b (multimodal) now.
-// If imports start 404ing with "model ... does not exist", check that page
+// When Groq errors (other than a 429) the function now retries the image on
+// Gemini automatically, so a retired model degrades instead of blocking.
+// Still worth fixing: if imports start 404ing with "model ... does not exist", check that page
 // and update GROQ_MODEL (code default below, and the live secret if it was
 // set explicitly — secrets override the code default).
 //
@@ -298,10 +300,25 @@ Deno.serve(async (req) => {
     // Route to the configured provider. PDFs always go to Gemini — Groq's
     // Llama vision endpoint only accepts images ("invalid image data").
     const isPdf = mimeType === 'application/pdf';
-    const result = (PROVIDER === 'groq' && !isPdf)
+    let result = (PROVIDER === 'groq' && !isPdf)
       ? await callGroq(imageBase64, mimeType, prompt)
       : await callGemini(imageBase64, mimeType, prompt);
-    if ('error' in result) return json(result);
+
+    // Groq retires vision models every few weeks ("model ... does not exist").
+    // Rather than block the import, retry the same image on Gemini. 429s are
+    // left to the client's retry-after loop, so they don't burn Gemini quota.
+    let fellBackFrom: string | null = null;
+    if (PROVIDER === 'groq' && !isPdf && 'error' in result
+        && result.error !== 'rate_limited' && Deno.env.get('GEMINI_API_KEY')) {
+      console.warn('[parse] groq failed, falling back to gemini:', String(result.error).slice(0, 200));
+      fellBackFrom = String(result.error).slice(0, 200);
+      result = await callGemini(imageBase64, mimeType, prompt);
+    }
+    if ('error' in result) {
+      return json(fellBackFrom
+        ? { ...result, error: `${result.error} (after groq failed: ${fellBackFrom})` }
+        : result);
+    }
 
     const text = result.text || '';
     if (!text) return json({ rows: [], skipped: 0 });
@@ -345,7 +362,11 @@ Deno.serve(async (req) => {
 
     const valid = (rows as Array<Record<string, unknown>>).filter(r => isTrade(r) || isCashRow(r) || isDeposit(r));
 
-    return json({ rows: valid, skipped: (rows as unknown[]).length - valid.length });
+    return json({
+      rows: valid,
+      skipped: (rows as unknown[]).length - valid.length,
+      ...(fellBackFrom ? { provider: 'gemini', fallbackFrom: 'groq', fallbackReason: fellBackFrom } : {}),
+    });
   } catch (err) {
     return json({ error: `function crash: ${(err as Error).message}` });
   }
