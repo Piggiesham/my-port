@@ -188,7 +188,25 @@ export async function fetchPriceMap() {
   if (!supabaseEnabled) return null;
   const { data, error } = await supabase.from('prices').select('ticker, price_usd');
   if (error) throw error;
-  return Object.fromEntries((data ?? []).map(p => [p.ticker, Number(p.price_usd)]));
+  const map = Object.fromEntries((data ?? []).map(p => [p.ticker, Number(p.price_usd)]));
+
+  // A ticker added since the last daily refresh-prices run has no `prices` row
+  // yet and would value at $0. Fall back to its latest daily close in
+  // price_history until the next run fills the real quote. Best-effort: a
+  // failure here just leaves those tickers un-priced, as before.
+  try {
+    const { data: assets } = await supabase.from('assets').select('ticker, is_cash').eq('is_cash', false);
+    const missing = (assets ?? []).map(a => a.ticker).filter(t => map[t] == null);
+    const closes = await Promise.all(missing.map(async (ticker) => {
+      const { data: h } = await supabase.from('price_history')
+        .select('price_usd').eq('ticker', ticker).order('date', { ascending: false }).limit(1);
+      return [ticker, h?.[0] ? Number(h[0].price_usd) : null];
+    }));
+    for (const [ticker, px] of closes) if (px != null && px > 0) map[ticker] = px;
+  } catch (e) {
+    console.warn('[prices] price_history fallback failed', e);
+  }
+  return map;
 }
 
 // ----------------------------------------------------------------------------
