@@ -10,12 +10,12 @@
 //
 // Optional overrides:
 //   supabase secrets set GEMINI_MODEL=gemini-2.5-flash
-//   supabase secrets set GROQ_MODEL=qwen/qwen3.6-27b
+//   supabase secrets set GROQ_MODEL=qwen/qwen3.8-27b
 //   supabase secrets set LLM_PROVIDER=groq
 //
 // NOTE: Groq deprecates vision models periodically (see
 // https://console.groq.com/docs/deprecations). meta-llama/llama-4-scout-17b-16e-instruct
-// was retired 2026-06-17; this defaults to qwen/qwen3.6-27b (multimodal) now.
+// was retired 2026-06-17; this defaults to qwen/qwen3.8-27b (multimodal) now.
 // If imports start 404ing with "model ... does not exist", check that page
 // and update GROQ_MODEL (code default below, and the live secret if it was
 // set explicitly — secrets override the code default).
@@ -42,7 +42,7 @@ const CORS_HEADERS = {
 
 const PROVIDER = (Deno.env.get('LLM_PROVIDER') || 'gemini').toLowerCase();
 const GEMINI_MODEL = Deno.env.get('GEMINI_MODEL') || 'gemini-2.5-flash';
-const GROQ_MODEL   = Deno.env.get('GROQ_MODEL')   || 'qwen/qwen3.6-27b';
+const GROQ_MODEL   = Deno.env.get('GROQ_MODEL')   || 'qwen/qwen3.8-27b';
 
 function json(body: unknown) {
   return new Response(JSON.stringify(body), {
